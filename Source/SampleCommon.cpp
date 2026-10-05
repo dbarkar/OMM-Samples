@@ -708,35 +708,25 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
                         ImGui::SameLine();
                         ImGui::PushStyleColor(ImGuiCol_Text, m_IsReloadShadersSucceeded ? UI_DEFAULT : UI_RED);
                         if (ImGui::Button("Reload shaders")) {
-                            std::string sampleShaders;
-
-                            bool isTool = std::string(STRINGIFY(SHADERMAKE_PATH)) == "ShaderMake";
-                            if (isTool) {
-#ifdef _DEBUG
-                                sampleShaders = "_Bin\\Debug\\ShaderMake.exe";
-#else
-                                sampleShaders = "_Bin\\Release\\ShaderMake.exe";
-#endif
-                            } else
-                                sampleShaders = STRINGIFY(SHADERMAKE_PATH);
+                            std::string sampleShaders = "\"" STRINGIFY(SHADERMAKE_PATH) "\"";
 
                             // clang-format off
                                 sampleShaders +=
                                     " --flatten --stripReflection --WX --colorize"
                                     " --sRegShift 0 --bRegShift 32 --uRegShift 64 --tRegShift 128"
                                     " --binary"
-                                    " --shaderModel 6_6"
+                                    " --shaderModel 6_9"
                                     " --sourceDir Shaders"
                                     " --ignoreConfigDir"
                                     " -c Shaders/Shaders.cfg"
                                     " -o _Shaders"
                                     " -I Shaders"
                                     " -I External"
-                                    " -I " STRINGIFY(ML_SOURCE_DIR)
-                            " -I " STRINGIFY(NRD_SOURCE_DIR)
-                            " -I " STRINGIFY(NRI_SOURCE_DIR)
-                                " -I " STRINGIFY(SHARC_SOURCE_DIR)
-                                " -I " STRINGIFY(RTXCR_SOURCE_DIR)
+                                    " -I \"" STRINGIFY(ML_SOURCE_DIR) "\""
+                                    " -I \"" STRINGIFY(NRD_SOURCE_DIR) "\""
+                                    " -I \"" STRINGIFY(NRI_SOURCE_DIR) "\""
+                                    " -I \"" STRINGIFY(SHARC_SOURCE_DIR) "\""
+                                    " -I \"" STRINGIFY(RTXCR_SOURCE_DIR) "\""
                                 " -D RTXCR_INTEGRATION=" STRINGIFY(RTXCR_INTEGRATION);
                             // clang-format on
 
@@ -746,6 +736,9 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
                                 sampleShaders += " -p SPIRV --compiler \"" STRINGIFY(SHADERMAKE_DXC_VK_PATH) "\"";
 
                             printf("Compiling sample shaders...\n");
+#ifdef _WIN32
+                            sampleShaders = "\"" + sampleShaders + "\"";
+#endif
                             int32_t result = system(sampleShaders.c_str());
 #ifdef _WIN32
                             if (result)
