@@ -1,12 +1,16 @@
 // © 2022 NVIDIA Corporation
 #include <atomic>
+#include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <future>
 #include <map>
 #include <mutex>
 #include <set>
+#include <thread>
 #include "VisibilityMasks/OmmHelper.h"
 
 #include "NRIFramework.h"
@@ -1608,7 +1612,7 @@ void CopyFromReadBackBuffer(const NRIInterface& NRI, ommhelper::OmmBakeGeometryD
     void* map = NRI.MapBuffer(*readback, offset, size);
     memcpy(data.data(), map, size);
 
-    ZeroMemory(map, size);
+    std::memset(map, 0, size);
     NRI.UnmapBuffer(*readback);
 }
 
@@ -1648,10 +1652,10 @@ OmmGpuBakerPrebuildMemoryStats Sample::GetGpuBakerPrebuildMemoryStats(bool print
         auto toMb = [](size_t sizeInBytes) -> double { return double(sizeInBytes) / 1024.0 / 1024.0; };
         printf("\n[OMM][GPU] PreBake Stats:\n");
         printf("Mask Format: [%s]\n", m_OmmBakeDesc.format == ommhelper::OmmFormats::OC1_2_STATE ? "OC1_2_STATE" : "OC1_4_STATE");
-        printf("Subdivision Level: [%lu]\n", m_OmmBakeDesc.subdivisionLevel);
-        printf("Mip Bias: [%lu]\n", m_OmmBakeDesc.mipBias);
-        printf("Num Geometries: [%llu]\n", m_OmmAlphaGeometry.size());
-        printf("Num Primitives: Max:[%llu],  Total:[%llu]\n", maxPrimitiveNum, totalPrimitiveNum);
+        printf("Subdivision Level: [%u]\n", m_OmmBakeDesc.subdivisionLevel);
+        printf("Mip Bias: [%u]\n", m_OmmBakeDesc.mipBias);
+        printf("Num Geometries: [%zu]\n", m_OmmAlphaGeometry.size());
+        printf("Num Primitives: Max:[%" PRIu64 "],  Total:[%" PRIu64 "]\n", maxPrimitiveNum, totalPrimitiveNum);
         printf("Baker output memeory requested(mb): (total)%.3f\n", toMb(result.total));
         printf("Total ArrayDataSize(mb): %.3f\n", toMb(result.outputTotalSizes[(uint32_t)ommhelper::OmmDataLayout::ArrayData]));
         printf("Total DescArraySize(mb): %.3f\n", toMb(result.outputTotalSizes[(uint32_t)ommhelper::OmmDataLayout::DescArray]));
@@ -2018,7 +2022,7 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
 
     for (size_t batchId = 0; batchId < batches.size(); ++batchId) {
         const OmmBatch& batch = batches[batchId];
-        printf("\r%s\r[OMM] Batch [%llu / %llu]: ", std::string(100, ' ').c_str(), batchId + 1, batches.size());
+        printf("\r%s\r[OMM] Batch [%zu / %zu]: ", std::string(100, ' ').c_str(), batchId + 1, batches.size());
         std::vector<ommhelper::OmmBakeGeometryDesc*> bakeQueue;
         InitializeOmmGeometryFromCache(batch, bakeQueue);
 
@@ -2119,7 +2123,7 @@ void Sample::RebuildOmmGeometryAsync(uint64_t fenceValue) {
     while (NRI.GetFenceValue(*m_FrameFence) < fenceValue) {
         if (m_OmmShuttingDown.load())
             return;
-        Sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     if (m_OmmShuttingDown.load())
@@ -2243,7 +2247,7 @@ void Sample::AppendOmmImguiSettings(uint32_t frameIndex) {
             ImGui::SameLine();
             {
                 std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-                ImGui::Text("[Masked Geometry Num: %llu]", m_MaskedBlasses.size());
+                ImGui::Text("[Masked Geometry Num: %zu]", m_MaskedBlasses.size());
             }
             ImVec4 color = m_Settings.highLightAhs ? ImVec4(1.0f, 0.0f, 1.0f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, color);

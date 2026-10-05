@@ -9,6 +9,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
 #include "OmmHelper.h"
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 
 namespace ommhelper {
@@ -62,10 +64,13 @@ void OpacityMicroMapsHelper::Initialize(nri::Device* device, bool disableMaskedG
         if (m_DisableGeometryBuild)
             return; // diable geometry
 
+#ifdef _WIN32
         if (gapi == nri::GraphicsAPI::D3D12) {
             nriResult |= (uint32_t)nri::nriGetInterface(*m_Device, NRI_INTERFACE(nri::WrapperD3D12Interface), (nri::WrapperD3D12Interface*)&NRI);
             InitializeD3D12();
-        } else if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::VK) {
+        } else
+#endif
+        if (gapi == nri::GraphicsAPI::VK) {
             nriResult |= (uint32_t)nri::nriGetInterface(*m_Device, NRI_INTERFACE(nri::WrapperVKInterface), (nri::WrapperVKInterface*)&NRI);
             InitializeVK();
         }
@@ -77,8 +82,10 @@ void OpacityMicroMapsHelper::Destroy() {
     ommDestroyBaker(m_OmmCpuBaker);
     ReleaseGeometryMemory();
 
+#ifdef _WIN32
     if(m_Device5)
         m_Device5->Release();
+#endif
 }
 
 #pragma region[ Utils ]
@@ -167,6 +174,7 @@ inline ommTextureAddressMode GetOmmAddressingMode(nri::AddressMode mode) {
 
 void OpacityMicroMapsHelper::ConvertUsageCountsToApiFormat(uint8_t* outFormattedBuffer, size_t& outSize, const uint8_t* bakerOutputBuffer, size_t bakerOutputBufferSize) {
     size_t stride = 0;
+#ifdef _WIN32
     if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12) {
         stride = sizeof(D3D12_RAYTRACING_OPACITY_MICROMAP_HISTOGRAM_ENTRY);
 
@@ -183,7 +191,9 @@ void OpacityMicroMapsHelper::ConvertUsageCountsToApiFormat(uint8_t* outFormatted
             sanitizedUsageCounts.push_back(usageDesc);
         }
         memcpy(outFormattedBuffer, sanitizedUsageCounts.data(), outSize);
-    } else {
+    } else
+#endif
+    {
         stride = sizeof(VkMicromapUsageEXT);
 
         size_t countsNum = bakerOutputBufferSize / sizeof(ommCpuOpacityMicromapUsageCount);
@@ -218,7 +228,9 @@ void OpacityMicroMapsHelper::DestroyMaskedGeometry(nri::AccelerationStructure* b
 }
 
 void OpacityMicroMapsHelper::ReleaseGeometryMemory() {
+#ifdef _WIN32
     ReleaseMemoryD3D12();
+#endif
     ReleaseMemoryVK();
 }
 
@@ -459,9 +471,11 @@ void OpacityMicroMapsHelper::GetBlasPrebuildInfo(MaskedGeometryBuildDesc** queue
     if (m_DisableGeometryBuild)
         return;
 
+#ifdef _WIN32
     if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12)
         GetPreBuildInfoD3D12(queue, count);
     else
+#endif
         GetPreBuildInfoVK(queue, count);
 }
 
@@ -469,9 +483,11 @@ void OpacityMicroMapsHelper::BuildMaskedGeometry(MaskedGeometryBuildDesc** queue
     if (m_DisableGeometryBuild)
         return;
 
+#ifdef _WIN32
     if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12)
         BuildMaskedGeometryD3D12(queue, count, commandBuffer);
     else
+#endif
         BuildMaskedGeometryVK(queue, count, commandBuffer);
 }
 

@@ -3,13 +3,6 @@ cmake_minimum_required(VERSION 4.1)
 include(FetchContent)
 include(CMakeDependentOption)
 
-# Architecture
-if((CMAKE_GENERATOR_PLATFORM MATCHES "ARM64") OR (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64"))
-    set(IS_ARM64 TRUE)
-else()
-    set(IS_ARM64 FALSE)
-endif()
-
 # GitHub actions?
 if("$ENV{GITHUB_ACTIONS}" STREQUAL "")
     set(GITHUB_CI FALSE CACHE BOOL "GitHub Actions runner" FORCE)
@@ -34,6 +27,22 @@ endif()
 # Create project
 project(OMMSample LANGUAGES C CXX)
 
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(ARM64|aarch64)$")
+    set(IS_ARM64 TRUE)
+else()
+    set(IS_ARM64 FALSE)
+endif()
+
+# NRI and NRIFramework use CMAKE_SYSTEM_PROCESSOR, which can report the Windows host.
+# Correct it so x64 builds on ARM64 hosts select x64 dependencies.
+if(WIN32)
+    if(IS_ARM64)
+        set(CMAKE_SYSTEM_PROCESSOR "ARM64")
+    else()
+        set(CMAKE_SYSTEM_PROCESSOR "AMD64")
+    endif()
+endif()
+
 # Globals?
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
@@ -42,25 +51,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
 
 # Download dependencies (Packman)
-if(WIN32)
+if(CMAKE_HOST_WIN32)
     set(PACKMAN_EXT ".cmd")
 else()
     set(PACKMAN_EXT ".sh")
 endif()
-
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    if(WIN32)
-        set(PACKMAN_PLATFORM "windows-x86_64")
-    else()
-        set(PACKMAN_PLATFORM "linux-x86_64")
-    endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-    set(PACKMAN_PLATFORM "linux-aarch64")
-else()
-    message(FATAL_ERROR "Unsupported architecture: '${CMAKE_SYSTEM_PROCESSOR}'")
-endif()
-
-message("Packman platform: ${PACKMAN_PLATFORM}")
 
 if(USE_MINIMAL_DATA)
     set(NRI_DATA_VERSION 2.3_minimal)
@@ -69,7 +64,7 @@ else()
     set(NRI_DATA_VERSION 2.3)
 endif()
 
-execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/External/Packman/packman${PACKMAN_EXT}" pull "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies.xml" -p ${PACKMAN_PLATFORM} -t nri_data_version=${NRI_DATA_VERSION}
+execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/External/Packman/packman${PACKMAN_EXT}" pull "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies.xml" -t nri_data_version=${NRI_DATA_VERSION}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     RESULT_VARIABLE PACKMAN_RESULT
 )
@@ -83,7 +78,7 @@ set(DEPS)
 
 if(NOT TARGET ShaderMake)
     # ShaderMake
-    option(SHADERMAKE_TOOL "" OFF)
+    option(SHADERMAKE_TOOL "" ON)
 
     FetchContent_Declare(
         shadermake
@@ -133,24 +128,6 @@ if(DEPS)
     FetchContent_MakeAvailable(${DEPS})
 endif()
 
-# Compile options
-if(NOT IS_ARM64)
-    set(SIMD -mssse3)
-endif()
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(COMPILE_OPTIONS ${SIMD} -Wextra -Wno-missing-field-initializers)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    set(COMPILE_OPTIONS ${SIMD} -Wextra -Wno-missing-field-initializers)
-elseif(MSVC)
-    set(COMPILE_OPTIONS /W4 /WX
-        /wd4324 # padding was added at the end of a structure because you specified an alignment specifier
-        /wd4834 # discarding return value of function with 'nodiscard' attribute
-    )
-else()
-    message(WARNING "Unknown compiler!")
-endif()
-
 # Compile definitions
 if(WIN32)
     set(COMPILE_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -180,13 +157,19 @@ endif()
 
 # External/NRIFramework
 set(NRI_SHADERS_PATH "${SHADER_OUTPUT_PATH}" CACHE STRING "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    option(NRIF_USE_WAYLAND "Use Wayland" ON)
+    if(NRIF_USE_WAYLAND)
+        option(GLFW_BUILD_X11 "" OFF)
+    endif()
+endif()
 option(NRI_ENABLE_NONE_SUPPORT "" OFF)
 option(NRI_ENABLE_D3D11_SUPPORT "" OFF)
 option(NRI_ENABLE_NIS_SDK "" ON)
-if(NOT IS_ARM64)
 option(NRI_ENABLE_NGX_SDK "" ON)
-option(NRI_ENABLE_FFX_SDK "" ON)
-option(NRI_ENABLE_XESS_SDK "" ON)
+if(NOT IS_ARM64)
+    option(NRI_ENABLE_FFX_SDK "" ON)
+    option(NRI_ENABLE_XESS_SDK "" ON)
 endif()
 
 add_subdirectory("External/NRIFramework")
@@ -205,6 +188,21 @@ option(NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX "" OFF)
 option(NRD_SUPPORTS_BASECOLOR_METALNESS "" OFF)
 
 add_subdirectory("External/NRD")
+
+# MathLib incorrectly passes MSVC's preprocessor switch to clang-cl.
+if(IS_ARM64 AND MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    get_target_property(MATHLIB_COMPILE_OPTIONS MathLib INTERFACE_COMPILE_OPTIONS)
+    list(REMOVE_ITEM MATHLIB_COMPILE_OPTIONS /Zc:preprocessor)
+    set_property(TARGET MathLib PROPERTY INTERFACE_COMPILE_OPTIONS "${MATHLIB_COMPILE_OPTIONS}")
+endif()
+
+# Work around MathLib's GCC aliasing and clang-cl x64 build issues.
+foreach(DEPENDENCY NRIFramework NRD)
+    target_compile_options(${DEPENDENCY} PRIVATE
+        $<$<CXX_COMPILER_ID:GNU>:-fno-strict-aliasing>
+        $<$<AND:$<NOT:$<BOOL:${IS_ARM64}>>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-mssse3>
+    )
+endforeach()
 
 # Opacity Micro-Maps
 set(OMM_VK_S_SHIFT 0 CACHE STRING "OMM_VK_S_SHIFT")
@@ -242,11 +240,13 @@ fix_folders("External/NRD" "External")
 get_target_property(ML_SOURCE_DIR MathLib SOURCE_DIR)
 get_target_property(NRI_SOURCE_DIR NRI SOURCE_DIR)
 get_target_property(NRD_SOURCE_DIR NRD SOURCE_DIR)
+FetchContent_GetProperties(vulkan_headers)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "Source"
     "External"
     "External/Opacity-MicroMap-SDK/libraries/omm-lib/include"
+    "${vulkan_headers_SOURCE_DIR}/include"
     "$ENV{VULKAN_SDK}/include"
 )
 
@@ -269,7 +269,22 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     RTXCR_SOURCE_DIR=${rtxcr_SOURCE_DIR}/shaders/include/rtxcr
     RTXCR_INTEGRATION=$<BOOL:${RTXCR_INTEGRATION}>
 )
-target_compile_options(${PROJECT_NAME} PRIVATE ${COMPILE_OPTIONS})
+target_compile_options(${PROJECT_NAME}
+    PRIVATE
+        # Options for Clang/GCC compilers
+        $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:GNU>>:
+            -Wextra
+            -Wno-missing-field-initializers
+            $<$<NOT:$<BOOL:${IS_ARM64}>>:-mssse3>
+            $<$<CXX_COMPILER_ID:GNU>:-fno-strict-aliasing>
+        >
+        # Options for MSVC
+        $<$<CXX_COMPILER_ID:MSVC>:
+            /W4
+            /WX
+            /wd4324 # padding was added at the end of a structure because you specified an alignment specifier
+        >
+)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     NRIFramework
@@ -279,7 +294,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 if(UNIX)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS} pthread X11)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS} pthread)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Drop libX11 (if not used), linked unconditionally by NRIFramework
+        target_link_options(${PROJECT_NAME} PRIVATE -Wl,--as-needed)
+    endif()
 endif()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES

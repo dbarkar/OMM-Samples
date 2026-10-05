@@ -10,11 +10,14 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #pragma once
 
-#include <dxgi1_6.h>
-#include "build/native/include/d3d12.h"
+#ifdef _WIN32
+#    include <dxgi1_6.h>
+#    include "build/native/include/d3d12.h"
+#endif
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <cstdio>
 #include <map>
 #include <vector>
 
@@ -23,7 +26,9 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #include "Extensions/NRIDeviceCreation.h"
 #include "Extensions/NRIHelper.h"
 #include "Extensions/NRIRayTracing.h"
-#include "Extensions/NRIWrapperD3D12.h"
+#ifdef _WIN32
+#    include "Extensions/NRIWrapperD3D12.h"
+#endif
 #include "Extensions/NRIWrapperVK.h"
 
 #define OMM_SUPPORTS_CPP17 (1)
@@ -253,6 +258,7 @@ public:
     void Destroy();
 
 private:
+#ifdef _WIN32
     // D3D12:
     void InitializeD3D12();
     void GetPreBuildInfoD3D12(MaskedGeometryBuildDesc** queue, const size_t count);
@@ -263,6 +269,7 @@ private:
     void BuildOmmArrayD3D12(MaskedGeometryBuildDesc& desc, nri::CommandBuffer* commandBuffer);
     void BuildBlasD3D12(MaskedGeometryBuildDesc& desc, nri::CommandBuffer* commandBuffer);
     ID3D12GraphicsCommandList4* GetD3D12GraphicsCommandList4(nri::CommandBuffer* commandBuffer);
+#endif
 
     // VK:
     void InitializeVK();
@@ -285,10 +292,12 @@ private:
     const uint64_t m_SctrachSize = 10 * 1024 * 1024;
     uint64_t m_CurrentHeapOffset;
 
+#ifdef _WIN32
     // D3D12:
     std::vector<ID3D12Heap*> m_D3D12GeometryHeaps;
     ID3D12Resource* m_D3D12ScratchBuffer = nullptr;
     ID3D12Device5* m_Device5 = nullptr;
+#endif
 
     // VK:
     std::vector<VkDeviceMemory> m_VkMemories;
@@ -301,7 +310,9 @@ private:
         : public nri::CoreInterface,
           public nri::RayTracingInterface,
           public nri::HelperInterface,
+#ifdef _WIN32
           public nri::WrapperD3D12Interface,
+#endif
           public nri::WrapperVKInterface {};
 
     NriInterface NRI = {};

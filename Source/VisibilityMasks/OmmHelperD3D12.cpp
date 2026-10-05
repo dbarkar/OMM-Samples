@@ -8,6 +8,8 @@ distribution of this software and related documentation without an express
 license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
+#ifdef _WIN32
+
 #include "OmmHelper.h"
 #include <cassert>
 
@@ -322,3 +324,5 @@ void OpacityMicroMapsHelper::BuildMaskedGeometryD3D12(MaskedGeometryBuildDesc** 
     }
 }
 } // namespace ommhelper
+
+#endif
