@@ -229,7 +229,7 @@ nri::BufferView GetNriBufferViewType(ommGpuDescriptorType type) {
         case ommGpuDescriptorType_RawBufferRead:
             return nri::BufferView::BYTE_ADDRESS_BUFFER;
         case ommGpuDescriptorType_RawBufferWrite:
-            return nri::BufferView::BYTE_ADDRESS_BUFFER;
+            return nri::BufferView::STORAGE_BYTE_ADDRESS_BUFFER;
         case ommGpuDescriptorType_TextureRead:
         default:
             printf("[FAIL] Invalid BufferDescriptorType\n");
