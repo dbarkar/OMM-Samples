@@ -73,23 +73,7 @@ float4 Trace( uint2 pixelPos, compiletime int mode )
         return float4( 0.0, 0.0, 0.0, FP16_MAX );
 
     // SHARC state
-    HashGridParameters hashGridParams;
-    hashGridParams.cameraPosition = gCameraGlobalPos.xyz;
-    hashGridParams.sceneScale = SHARC_SCENE_SCALE;
-    hashGridParams.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
-    hashGridParams.levelBias = SHARC_GRID_LEVEL_BIAS;
-
-    HashMapData hashMapData;
-    hashMapData.capacity = SHARC_CAPACITY;
-    hashMapData.hashEntriesBuffer = gInOut_SharcHashEntriesBuffer;
-
-    SharcParameters sharcParams;
-    sharcParams.gridParameters = hashGridParams;
-    sharcParams.hashMapData = hashMapData;
-    sharcParams.radianceScale = SHARC_RADIANCE_SCALE;
-    sharcParams.enableAntiFireflyFilter = SHARC_ANTI_FIREFLY;
-    sharcParams.accumulationBuffer = gInOut_SharcAccumulated;
-    sharcParams.resolvedBuffer = gInOut_SharcResolved;
+    SharcParameters sharcParams = GetSharcParameters( );
 
     SharcState sharcState;
     SharcInit( sharcState );
@@ -107,6 +91,8 @@ float4 Trace( uint2 pixelPos, compiletime int mode )
     gradientData.yz = Packing::EncodeUnitVector( Geometry::RotateVector( gWorldToViewPrev, geometryProps.N ) );
     gradientData.w = Geometry::AffineTransform( gWorldToViewPrev, geometryProps.X ).z * FP16_VIEWZ_SCALE;
 
+    uint BOUNCES_NUM = mode == FULL ? SHARC_PROPAGATION_DEPTH : 1;
+    uint bounceNum = BOUNCES_NUM;
     if( mode != PREV )
     {
         SharcHitData sharcHitData;
@@ -116,13 +102,11 @@ float4 Trace( uint2 pixelPos, compiletime int mode )
         sharcHitData.emissive = materialProps.Lemi;
 
         SharcSetThroughput( sharcState, 1.0 );
-        SharcUpdateHit( sharcParams, sharcState, sharcHitData, L, 1.0 ); // 0 bounce => no cache resampling => always returns "true"
+        if( !SharcUpdateHit( sharcParams, sharcState, sharcHitData, L, 1.0 ) )
+            bounceNum = 0;
     }
 
     // Secondary
-    uint BOUNCES_NUM = mode == FULL ? SHARC_PROPAGATION_DEPTH : 1;
-    uint bounceNum = BOUNCES_NUM;
-
     while( bounceNum ) // why not "for"? because DXC produced invalid code for "for" after introduction the compile-time constant "mode"
     {
         //=============================================================================================================================================================

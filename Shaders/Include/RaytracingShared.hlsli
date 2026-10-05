@@ -11,6 +11,21 @@ NRI_RESOURCE( RWStructuredBuffer<uint64_t>, gInOut_SharcHashEntriesBuffer, u, 0,
 NRI_RESOURCE( RWStructuredBuffer<SharcAccumulationData>, gInOut_SharcAccumulated, u, 1, SET_SHARC );
 NRI_RESOURCE( RWStructuredBuffer<SharcPackedData>, gInOut_SharcResolved, u, 2, SET_SHARC );
 
+SharcParameters GetSharcParameters( )
+{
+    SharcParameters params;
+    params.hashGridParameters.cameraPosition = gCameraGlobalPos.xyz;
+    params.hashGridParameters.sceneScale = SHARC_SCENE_SCALE;
+    params.hashGridParameters.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
+    params.hashGridParameters.levelBias = SHARC_GRID_LEVEL_BIAS;
+    params.hashGridData.capacity = SHARC_CAPACITY;
+    params.hashGridData.hashEntriesBuffer = gInOut_SharcHashEntriesBuffer;
+    params.radianceScale = SHARC_RADIANCE_SCALE;
+    params.accumulationBuffer = gInOut_SharcAccumulated;
+    params.resolvedBuffer = gInOut_SharcResolved;
+    return params;
+}
+
 #if( USE_STOCHASTIC_SAMPLING == 1 )
     #define TEX_SAMPLER gNearestMipmapNearestSampler
 #else
@@ -693,7 +708,7 @@ float3 GenerateRayAndUpdateThroughput( inout GeometryProps geometryProps, inout 
     #if( RTXCR_INTEGRATION == 1 )
         if( isHair )
         {
-            float2 rand[2] = { Rng::Hash::GetFloat2( ), Rng::Hash::GetFloat2( ) };
+            float3 rand[2] = { float3( Rng::Hash::GetFloat2( ), rnd.y ), float3( Rng::Hash::GetFloat2( ), 0.0 ) };
 
             float3 specular = 0.0;
             float3 diffuse = 0.0;
@@ -701,7 +716,7 @@ float3 GenerateRayAndUpdateThroughput( inout GeometryProps geometryProps, inout 
 
             RTXCR_HairInteractionSurface hairSurface = Hair_GetSurface( Vlocal );
             RTXCR_HairMaterialInteractionBcsdf hairMaterial = Hair_GetMaterial( );
-            RTXCR_SampleFarFieldBcsdf( hairSurface, hairMaterial, Vlocal, 2.0 * rnd.x - 1.0, rnd.y, rand, candidateRayLocal, specular, diffuse, pdf );
+            RTXCR_SampleFarFieldBcsdf( hairSurface, hairMaterial, Vlocal, 2.0 * rnd.x - 1.0, rand, candidateRayLocal, specular, diffuse, pdf );
         }
         else
     #endif

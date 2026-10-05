@@ -143,11 +143,7 @@ TraceOpaqueResult TraceOpaque( GeometryProps geometryProps, MaterialProps materi
 
     // SHARC debug visualization
 #if( USE_SHARC_DEBUG != 0 )
-    HashGridParameters hashGridParams;
-    hashGridParams.cameraPosition = gCameraGlobalPos.xyz;
-    hashGridParams.sceneScale = SHARC_SCENE_SCALE;
-    hashGridParams.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
-    hashGridParams.levelBias = SHARC_GRID_LEVEL_BIAS;
+    SharcParameters sharcParams = GetSharcParameters( );
 
     SharcHitData sharcHitData;
     sharcHitData.positionWorld = GetGlobalPos( geometryProps.X );
@@ -155,21 +151,9 @@ TraceOpaqueResult TraceOpaque( GeometryProps geometryProps, MaterialProps materi
     sharcHitData.normalWorld = geometryProps.N;
     sharcHitData.emissive = materialProps.Lemi;
 
-    HashMapData hashMapData;
-    hashMapData.capacity = SHARC_CAPACITY;
-    hashMapData.hashEntriesBuffer = gInOut_SharcHashEntriesBuffer;
-
-    SharcParameters sharcParams;
-    sharcParams.gridParameters = hashGridParams;
-    sharcParams.hashMapData = hashMapData;
-    sharcParams.radianceScale = SHARC_RADIANCE_SCALE;
-    sharcParams.enableAntiFireflyFilter = SHARC_ANTI_FIREFLY;
-    sharcParams.accumulationBuffer = gInOut_SharcAccumulated;
-    sharcParams.resolvedBuffer = gInOut_SharcResolved;
-
     float3 color;
     #if( USE_SHARC_DEBUG == 2 )
-        color = HashGridDebugColoredHash( sharcHitData.positionWorld, sharcHitData.normalWorld, hashGridParams );
+        color = HashGridDebugColoredHash( sharcHitData.positionWorld, sharcHitData.normalWorld, sharcParams.hashGridParameters );
     #else
         bool isValid = SharcGetCachedRadiance( sharcParams, sharcHitData, color, true );
 
@@ -272,15 +256,11 @@ TraceOpaqueResult TraceOpaque( GeometryProps geometryProps, MaterialProps materi
                 Lcached = GetRadianceFromPreviousFrame( geometryProps, materialProps, pixelPos );
 
                 // L2 cache - SHARC
-                HashGridParameters hashGridParams;
-                hashGridParams.cameraPosition = gCameraGlobalPos.xyz;
-                hashGridParams.sceneScale = SHARC_SCENE_SCALE;
-                hashGridParams.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
-                hashGridParams.levelBias = SHARC_GRID_LEVEL_BIAS;
+                SharcParameters sharcParams = GetSharcParameters( );
 
                 float3 Xglobal = GetGlobalPos( geometryProps.X );
-                uint level = HashGridGetLevel( Xglobal, hashGridParams );
-                float voxelSize = HashGridGetVoxelSize( level, hashGridParams );
+                uint level = HashGridGetLevel( Xglobal, sharcParams.hashGridParameters );
+                float voxelSize = HashGridGetVoxelSize( level, sharcParams.hashGridParameters );
 
                 float footprint = geometryProps.hitT * lobeTanHalfAngleAtOrigin * 2.0;
                 float footprintNorm = saturate( footprint / voxelSize );
@@ -298,18 +278,6 @@ TraceOpaqueResult TraceOpaque( GeometryProps geometryProps, MaterialProps materi
                 sharcHitData.materialDemodulation = GetMaterialDemodulation( geometryProps, materialProps );
                 sharcHitData.normalWorld = geometryProps.N;
                 sharcHitData.emissive = materialProps.Lemi;
-
-                HashMapData hashMapData;
-                hashMapData.capacity = SHARC_CAPACITY;
-                hashMapData.hashEntriesBuffer = gInOut_SharcHashEntriesBuffer;
-
-                SharcParameters sharcParams;
-                sharcParams.gridParameters = hashGridParams;
-                sharcParams.hashMapData = hashMapData;
-                sharcParams.radianceScale = SHARC_RADIANCE_SCALE;
-                sharcParams.enableAntiFireflyFilter = SHARC_ANTI_FIREFLY;
-                sharcParams.accumulationBuffer = gInOut_SharcAccumulated;
-                sharcParams.resolvedBuffer = gInOut_SharcResolved;
 
                 bool isSharcAllowed = !geometryProps.Has( FLAG_HAIR ); // ignore if the hit is hair // TODO: if hair don't allow if hitT is too short
                 isSharcAllowed &= Rng::Hash::GetFloat( ) > Lcached.w; // is needed?
@@ -378,7 +346,7 @@ TraceOpaqueResult TraceOpaque( GeometryProps geometryProps, MaterialProps materi
     // Normalize hit distances for REBLUR before averaging
     float normHitDist = accumulatedHitDist;
     if( gDenoiserType != DENOISER_RELAX )
-        normHitDist = REBLUR_FrontEnd_GetNormHitDist( accumulatedHitDist, viewZ0, gHitDistSettings, isDiffusePath ? 1.0 : roughness0 );
+        normHitDist = REBLUR_FrontEnd_GetNormHitDist( accumulatedHitDist, viewZ0, gHitDistSettings.xyz, isDiffusePath ? 1.0 : roughness0 );
 
     // Accumulate diffuse and specular separately for denoising
     if( !USE_SANITIZATION || NRD_IsValidRadiance( Lsum ) )

@@ -103,15 +103,11 @@ float3 TraceTransparent( TraceTransparentDesc desc )
         Lcached = float4( prevLdiff + prevLspec, reprojectionWeight );
 
         // L2 cache - SHARC
-        HashGridParameters hashGridParams;
-        hashGridParams.cameraPosition = gCameraGlobalPos.xyz;
-        hashGridParams.sceneScale = SHARC_SCENE_SCALE;
-        hashGridParams.logarithmBase = SHARC_GRID_LOGARITHM_BASE;
-        hashGridParams.levelBias = SHARC_GRID_LEVEL_BIAS;
+        SharcParameters sharcParams = GetSharcParameters( );
 
         float3 Xglobal = GetGlobalPos( geometryProps.X );
-        uint level = HashGridGetLevel( Xglobal, hashGridParams );
-        float voxelSize = HashGridGetVoxelSize( level, hashGridParams );
+        uint level = HashGridGetLevel( Xglobal, sharcParams.hashGridParameters );
+        float voxelSize = HashGridGetVoxelSize( level, sharcParams.hashGridParameters );
 
         float2 rndScaled = ImportanceSampling::Cosine::GetRay( Rng::Hash::GetFloat2( ) ).xy;
         rndScaled *= voxelSize;
@@ -125,18 +121,6 @@ float3 TraceTransparent( TraceTransparentDesc desc )
         sharcHitData.materialDemodulation = GetMaterialDemodulation( geometryProps, materialProps );
         sharcHitData.normalWorld = geometryProps.N;
         sharcHitData.emissive = materialProps.Lemi;
-
-        HashMapData hashMapData;
-        hashMapData.capacity = SHARC_CAPACITY;
-        hashMapData.hashEntriesBuffer = gInOut_SharcHashEntriesBuffer;
-
-        SharcParameters sharcParams;
-        sharcParams.gridParameters = hashGridParams;
-        sharcParams.hashMapData = hashMapData;
-        sharcParams.radianceScale = SHARC_RADIANCE_SCALE;
-        sharcParams.enableAntiFireflyFilter = SHARC_ANTI_FIREFLY;
-        sharcParams.accumulationBuffer = gInOut_SharcAccumulated;
-        sharcParams.resolvedBuffer = gInOut_SharcResolved;
 
         bool isSharcAllowed = Rng::Hash::GetFloat( ) > Lcached.w; // is needed?
 

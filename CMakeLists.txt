@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.1)
 
 include(FetchContent)
 include(CMakeDependentOption)
@@ -86,8 +86,6 @@ set(DEPS)
 if(NOT TARGET ShaderMake)
     # ShaderMake
     option(SHADERMAKE_TOOL "" OFF)
-    set(SHADERMAKE_DXC_DATE "2026_02_20" CACHE STRING "" FORCE)
-    set(SHADERMAKE_DXC_VERSION "v1.9.2602" CACHE STRING "" FORCE)
 
     FetchContent_Declare(
         shadermake
@@ -104,7 +102,7 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP 1
     DOWNLOAD_NO_PROGRESS 1
     SOURCE_SUBDIR "ignore CMakeLists.txt"
-    URL https://github.com/NVIDIA-RTX/SHARC/archive/6893c9af2a16df07de0cd1b70a85404e2f8fc5e8.zip
+    URL https://github.com/NVIDIA-RTX/SHARC/archive/4e21b585c33c83d723ca9a1e11bbb1090d145793.zip
 )
 list(APPEND DEPS sharc)
 
@@ -115,14 +113,14 @@ if(RTXCR_INTEGRATION)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/NVIDIA-RTX/RTXCR-Material-Library/archive/refs/tags/v1.1.0.zip
+        URL https://github.com/NVIDIA-RTX/RTXCR-Material-Library/archive/refs/tags/v1.3.0.zip
     )
     list(APPEND DEPS rtxcr)
 
     FetchContent_Declare(
         claire
         GIT_REPOSITORY https://github.com/NVIDIA-RTX/RTXCR-Assets.git
-        GIT_TAG v1.1.0
+        GIT_TAG v1.2.0
         GIT_SHALLOW 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
         SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_Data/Scenes/Claire"
@@ -170,8 +168,8 @@ if (DXR_OMM)
 
     target_compile_definitions(${PROJECT_NAME} PRIVATE DXR_OMM=1)
 
-    set(NRI_AGILITY_SDK_VERSION_MAJOR "619" CACHE STRING "" FORCE)
-    set(NRI_AGILITY_SDK_VERSION_MINOR "1" CACHE STRING "" FORCE)
+    set(NRI_AGILITY_SDK_VERSION_MAJOR "620" CACHE STRING "" FORCE)
+    set(NRI_AGILITY_SDK_VERSION_MINOR "2" CACHE STRING "" FORCE)
     set(ASDK_NUPKG "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.${NRI_AGILITY_SDK_VERSION_MAJOR}.${NRI_AGILITY_SDK_VERSION_MINOR}")
 
     FetchContent_Declare(
@@ -246,6 +244,7 @@ set(OMM_VK_U_SHIFT 64 CACHE STRING "OMM_VK_U_SHIFT")
 set(OMM_PROJECT_FOLDER "Opacity Micro-Map SDK")
 set(OMM_ENABLE_TESTS OFF CACHE BOOL "")
 set(OMM_BUILD_VIEWER OFF CACHE BOOL "")
+set(OMM_BUILD_BENCHMARK OFF CACHE BOOL "")
 set(OMM_INTEGRATION_LAYER_NVRHI OFF CACHE BOOL "")
 set(OMM_STATIC_LIBRARY OFF CACHE BOOL "")
 set(OMM_OUTPUT_BIN_PATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
