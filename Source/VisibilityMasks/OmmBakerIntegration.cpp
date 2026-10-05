@@ -9,6 +9,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
 #include "OmmBakerIntegration.h"
+#include <algorithm>
 
 #define NRI_ABORT_ON_FAILURE(result) \
     if ((result) != nri::Result::SUCCESS) \
@@ -229,7 +230,7 @@ nri::BufferView GetNriBufferViewType(ommGpuDescriptorType type) {
         case ommGpuDescriptorType_RawBufferRead:
             return nri::BufferView::BYTE_ADDRESS_BUFFER;
         case ommGpuDescriptorType_RawBufferWrite:
-            return nri::BufferView::BYTE_ADDRESS_BUFFER;
+            return nri::BufferView::STORAGE_BYTE_ADDRESS_BUFFER;
         case ommGpuDescriptorType_TextureRead:
         default:
             printf("[FAIL] Invalid BufferDescriptorType\n");
@@ -591,7 +592,6 @@ void FillDispatchConfigDesc(ommGpuDispatchConfigDesc& dispatchConfigDesc, const 
     dispatchConfigDesc.maxScratchMemorySize = GetScratchMemoryBudget(settings.maxScratchMemorySize);
     dispatchConfigDesc.dynamicSubdivisionScale = settings.dynamicSubdivisionScale;
     dispatchConfigDesc.bakeFlags = GetBakeFlags(settings.bakeFlags);
-    dispatchConfigDesc.maxOutOmmArraySize = uint32_t(~0);
 }
 
 inline uint32_t GetAlignedSize(uint32_t size, uint32_t alignment) {
@@ -635,6 +635,8 @@ void OmmBakerGpuIntegration::AddGeometryToQueue(InputGeometryDesc* geometryDesc,
         instance.desc = &geometryDesc[i];
 
         FillDispatchConfigDesc(instance.dispatchConfigDesc, *instance.desc);
+        if (instance.dispatchConfigDesc.bakeFlags & ommGpuBakeFlags_PerformBake)
+            instance.dispatchConfigDesc.maxOutOmmArraySize = (uint32_t)std::min<uint64_t>(instance.desc->outputs.outArrayData.size, UINT32_MAX);
 
         ommGpuPreDispatchInfo info = ommGpuPreDispatchInfoDefault();
         ommResult ommResult = ommGpuGetPreDispatchInfo(m_Pipeline, &instance.dispatchConfigDesc, &info);
@@ -780,7 +782,7 @@ nri::Descriptor* OmmBakerGpuIntegration::GetDescriptor(const ommGpuResource& res
             bufferDesc.buffer = buffer.buffer;
             bufferDesc.offset = buffer.offset;
             bufferDesc.format = isRaw ? nri::Format::UNKNOWN : buffer.format;
-            bufferDesc.size = buffer.size - buffer.offset;
+            bufferDesc.size = buffer.size;
             bufferDesc.type = GetNriBufferViewType(resource.stateNeeded);
             NRI_ABORT_ON_FAILURE(NRI.CreateBufferView(bufferDesc, descriptor));
         }

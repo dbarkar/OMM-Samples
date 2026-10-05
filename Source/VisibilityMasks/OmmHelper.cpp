@@ -381,7 +381,7 @@ inline void FillGpuBakerInputBufferDesc(BufferResource& bakerDesc, const InputBu
     bakerDesc.buffer = (nri::Buffer*)inDesc.nriBufferOrPtr.buffer;
     bakerDesc.format = inDesc.format;
     bakerDesc.state = nri::AccessBits::SHADER_RESOURCE;
-    bakerDesc.size = inDesc.bufferSize;
+    bakerDesc.size = inDesc.bufferSize - inDesc.offset;
     bakerDesc.offset = inDesc.offset;
     bakerDesc.numElements = inDesc.numElements;
     bakerDesc.stride = inDesc.stride;
@@ -391,7 +391,7 @@ inline void FillGpuBakerInputBufferDesc(BufferResource& bakerDesc, const InputBu
 inline void FillGpuBakerResourceBufferDesc(BufferResource& bakerDesc, const GpuBakerBuffer& inDesc) {
     bakerDesc.buffer = inDesc.buffer;
     bakerDesc.offset = inDesc.offset;
-    bakerDesc.size = inDesc.bufferSize;
+    bakerDesc.size = inDesc.dataSize;
     bakerDesc.state = nri::AccessBits::NONE;
 }
 

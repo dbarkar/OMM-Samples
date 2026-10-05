@@ -1917,6 +1917,10 @@ void Sample::RunOmmSetupPass(OmmNriContext& context, ommhelper::OmmBakeGeometryD
         ommhelper::OmmBakeGeometryDesc& desc = *queue[i];
         CopyFromReadBackBuffer(NRI, desc, (uint32_t)ommhelper::OmmDataLayout::GpuPostBuildInfo);
         ommGpuPostDispatchInfo postbildInfo = *(ommGpuPostDispatchInfo*)desc.outData[(uint32_t)ommhelper::OmmDataLayout::GpuPostBuildInfo].data();
+        if (postbildInfo.outOmmArraySizeInBytes == 0) {
+            fprintf(stderr, "[FAIL][OMM] GPU setup returned an empty array for geometry %zu.\n", i);
+            std::abort();
+        }
         desc.gpuBakerPreBuildInfo.dataSizes[(uint32_t)ommhelper::OmmDataLayout::ArrayData] = postbildInfo.outOmmArraySizeInBytes;
     }
     memoryStats = GetGpuBakerPrebuildMemoryStats(true);
