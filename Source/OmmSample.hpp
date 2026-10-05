@@ -1208,14 +1208,15 @@ void Sample::InitAlphaTestedGeometry() {
     size_t positionBufferSize = 0;
     size_t indexBufferSize = 0;
     size_t uvBufferSize = 0;
+    uint32_t bufferAlignment = NRI.GetDeviceDesc(*m_Device).memoryAlignment.bufferShaderResourceOffset;
 
     for (size_t i = 0; i < alphaInstances.size(); ++i) { // Calculate buffer sizes
         const utils::Instance& instance = m_Scene.instances[alphaInstances[i]];
         const utils::Mesh& mesh = m_Scene.meshes[instance.meshInstanceIndex];
 
-        positionBufferSize += helper::Align(mesh.vertexNum * sizeof(float3), 256);
-        indexBufferSize += helper::Align(mesh.indexNum * sizeof(utils::Index), 256);
-        uvBufferSize += helper::Align(mesh.vertexNum * sizeof(float2), 256);
+        positionBufferSize += helper::Align(mesh.vertexNum * sizeof(float3), bufferAlignment);
+        indexBufferSize += helper::Align(mesh.indexNum * sizeof(utils::Index), bufferAlignment);
+        uvBufferSize += helper::Align(mesh.vertexNum * sizeof(float2), bufferAlignment);
     }
 
     m_OmmAlphaGeometryBuffers.reserve(3);
@@ -1245,9 +1246,6 @@ void Sample::InitAlphaTestedGeometry() {
     std::vector<uint8_t> positions;
     std::vector<uint8_t> uvs;
     std::vector<uint8_t> indices;
-
-    uint32_t storageAlignment = NRI.GetDeviceDesc(*m_Device).memoryAlignment.bufferShaderResourceOffset;
-    uint32_t bufferAlignment = storageAlignment;
 
     nri::Texture** materialTextures = m_Textures.data() + (size_t)Texture::BaseReadOnlyTexture;
     for (size_t i = 0; i < alphaInstances.size(); ++i) {
@@ -1297,7 +1295,7 @@ void Sample::InitAlphaTestedGeometry() {
         geometry.uvs = uvBuffer;
         geometry.uvOffset = uvs.size();
         geometry.uvBufferSize = uvBufferSize;
-        uvs.resize(geometry.uvOffset + helper::Align(uvDataSize, storageAlignment));
+        uvs.resize(geometry.uvOffset + helper::Align(uvDataSize, bufferAlignment));
         memcpy(uvs.data() + geometry.uvOffset, geometry.uvData.data(), uvDataSize);
     }
 
