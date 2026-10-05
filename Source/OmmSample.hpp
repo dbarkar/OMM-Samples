@@ -641,6 +641,7 @@ private:
     nri::Queue* m_GraphicsQueue = nullptr;
     nri::Fence* m_FrameFence = nullptr;
     nri::DescriptorPool* m_DescriptorPool = nullptr;
+    nri::StreamerCopyBatch m_StreamerCopyBatch = 0;
     nri::PipelineLayout* m_PipelineLayout = nullptr;
     std::array<nri::Upscaler*, 2> m_NIS = {};
     std::vector<QueuedFrame> m_QueuedFrames = {};
@@ -931,8 +932,9 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
         streamerDesc.constantBufferMemoryLocation = nri::MemoryLocation::DEVICE_UPLOAD;
         streamerDesc.constantBufferSize = DYNAMIC_CONSTANT_BUFFER_SIZE;
         streamerDesc.dynamicBufferMemoryLocation = nri::MemoryLocation::DEVICE_UPLOAD;
-        streamerDesc.dynamicBufferDesc = {0, 0, nri::BufferUsageBits::VERTEX_BUFFER | nri::BufferUsageBits::INDEX_BUFFER | nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::ACCELERATION_STRUCTURE_BUILD_INPUT};
+        streamerDesc.dynamicBufferDesc = {0, 0, nri::BufferUsageBits::VERTEX | nri::BufferUsageBits::INDEX | nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::ACCELERATION_STRUCTURE_BUILD_INPUT};
         streamerDesc.queuedFrameNum = GetQueuedFrameNum();
+        streamerDesc.hostDataCapacity = IMGUI_HOST_DATA_CAPACITY;
         NRI_ABORT_ON_FAILURE(NRI.CreateStreamer(*m_Device, streamerDesc, m_Streamer));
     }
 
@@ -1229,9 +1231,10 @@ void Sample::InitAlphaTestedGeometry() {
         NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, positionBuffer));
 
         bufferDesc.size = indexBufferSize;
+        bufferDesc.byteAddress = true;
         NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, indexBuffer));
 
-        // uv buffer is used in OMM baking as a raw read buffer. For compatibility with Vulkan this buffer is required to be structured
+        // UVs are read as a byte-address buffer by the OMM baker.
         bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE;
         bufferDesc.size = uvBufferSize;
         bufferDesc.structureStride = sizeof(uint32_t);
@@ -1730,6 +1733,7 @@ void Sample::CreateAndBindGpuBakerArrayDataBuffer(const OmmGpuBakerPrebuildMemor
     nri::BufferDesc bufferDesc = {};
     bufferDesc.structureStride = sizeof(uint32_t);
     bufferDesc.size = memoryStats.outputTotalSizes[arrayDataId];
+    bufferDesc.byteAddress = true;
     bufferDesc.size = helper::Align(bufferDesc.size, ommAlignment);
     bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE;
     NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuOutputBuffers[arrayDataId]));
@@ -1761,6 +1765,7 @@ void Sample::CreateAndBindGpuBakerSatitcBuffers(const OmmGpuBakerPrebuildMemoryS
     std::vector<nri::Buffer*> readbackBuffers;
     for (size_t i = staticDataBegin; i < buffersEnd; ++i) {
         bufferDesc.size = memoryStats.outputTotalSizes[i];
+        bufferDesc.byteAddress = true;
         bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE;
         NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuOutputBuffers[i]));
         gpuBuffers.push_back(m_OmmGpuOutputBuffers[i]);
@@ -1769,7 +1774,8 @@ void Sample::CreateAndBindGpuBakerSatitcBuffers(const OmmGpuBakerPrebuildMemoryS
     for (size_t i = 0; i < OMM_MAX_TRANSIENT_POOL_BUFFERS; ++i) {
         bufferDesc.size = memoryStats.maxTransientBufferSizes[i];
         if (bufferDesc.size) {
-            bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::ARGUMENT_BUFFER;
+            bufferDesc.byteAddress = true;
+            bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::ARGUMENT;
             NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuTransientBuffers[i]));
             gpuBuffers.push_back(m_OmmGpuTransientBuffers[i]);
         }
@@ -1778,6 +1784,7 @@ void Sample::CreateAndBindGpuBakerSatitcBuffers(const OmmGpuBakerPrebuildMemoryS
     for (size_t i = postBakeReadbackDataBegin; i < buffersEnd; ++i) {
         bufferDesc.size = memoryStats.outputTotalSizes[i];
         bufferDesc.usage = nri::BufferUsageBits::NONE;
+        bufferDesc.byteAddress = false;
         NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuReadbackBuffers[i]));
         readbackBuffers.push_back(m_OmmGpuReadbackBuffers[i]);
     }

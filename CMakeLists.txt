@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.1)
 
 include(FetchContent)
 include(CMakeDependentOption)
@@ -86,8 +86,6 @@ set(DEPS)
 if(NOT TARGET ShaderMake)
     # ShaderMake
     option(SHADERMAKE_TOOL "" OFF)
-    set(SHADERMAKE_DXC_DATE "2026_02_20" CACHE STRING "" FORCE)
-    set(SHADERMAKE_DXC_VERSION "v1.9.2602" CACHE STRING "" FORCE)
 
     FetchContent_Declare(
         shadermake
@@ -104,7 +102,7 @@ FetchContent_Declare(
     DOWNLOAD_EXTRACT_TIMESTAMP 1
     DOWNLOAD_NO_PROGRESS 1
     SOURCE_SUBDIR "ignore CMakeLists.txt"
-    URL https://github.com/NVIDIA-RTX/SHARC/archive/6893c9af2a16df07de0cd1b70a85404e2f8fc5e8.zip
+    URL https://github.com/NVIDIA-RTX/SHARC/archive/refs/tags/v1.6.5.0.zip
 )
 list(APPEND DEPS sharc)
 
@@ -115,14 +113,14 @@ if(RTXCR_INTEGRATION)
         DOWNLOAD_EXTRACT_TIMESTAMP 1
         DOWNLOAD_NO_PROGRESS 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
-        URL https://github.com/NVIDIA-RTX/RTXCR-Material-Library/archive/refs/tags/v1.1.0.zip
+        URL https://github.com/NVIDIA-RTX/RTXCR-Material-Library/archive/refs/tags/v1.3.0.zip
     )
     list(APPEND DEPS rtxcr)
 
     FetchContent_Declare(
         claire
         GIT_REPOSITORY https://github.com/NVIDIA-RTX/RTXCR-Assets.git
-        GIT_TAG v1.1.0
+        GIT_TAG v1.2.0
         GIT_SHALLOW 1
         SOURCE_SUBDIR "ignore CMakeLists.txt"
         SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_Data/Scenes/Claire"

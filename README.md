@@ -1,7 +1,7 @@
 # OMM Sample
 
 *Opacity Micro-Map sample* demostrates usage of Opacity Micro-Maps in Raytracing. Sample details:
-- Opacity Micro-Map SDK is used for OMM baking. Both CPU baker and GPU baker are supported in the sample: https://github.com/NVIDIAGameWorks/Opacity-MicroMap-SDK
+- Opacity Micro-Map SDK is used for OMM baking. Both CPU baker and GPU baker are supported in the sample: https://github.com/NVIDIA-RTX/OMM
 - Rendering and Denoising are based on NRDSample: https://github.com/NVIDIAGameWorks/NRDSample
 - The sample primarily uses the DXR 1.2 API, with NvAPI available as a legacy fallback option.
 
@@ -9,7 +9,7 @@
 
 ## Build instructions
 
-- Install [*Cmake*](https://cmake.org/download/) 3.15+
+- Install [*Cmake*](https://cmake.org/download/) 4.1+
 - Install on
     - Windows: latest *WindowsSDK* (22000+), *VulkanSDK* (1.3.231+)
 - Build (variant 1) - using *Git* and *CMake* explicitly
@@ -21,17 +21,16 @@
 
 ### CMake options
 
-- `USE_MINIMAL_DATA=ON` - download minimal resource package (90MB) - set ShaderBalls.obj scene via cmdargs
-- `DISABLE_SHADER_COMPILATION=ON` - disable compilation of shaders (shaders can be built on other platform)
-- `DXC_CUSTOM_PATH=custom/path/to/dxc` - custom path to *DXC* (will be used if VulkanSDK is not found)
-- `USE_DXC_FROM_PACKMAN_ON_AARCH64=OFF` - use default path for *DXC*
+- `USE_MINIMAL_DATA=ON` - download minimal resource package (90MB); run with `--scene=ShaderBalls/ShaderBalls.gltf`
+- `RTXCR_INTEGRATION=OFF` - disable the optional hair and skin rendering integration and Claire assets
+- `SHADERMAKE_FIND_DXC=OFF` with `SHADERMAKE_DXC_PATH=C:/path/to/dxc.exe` - use a custom DXIL compiler
+- `SHADERMAKE_FIND_DXC_VK=OFF` with `SHADERMAKE_DXC_VK_PATH=C:/path/to/dxc.exe` - use a custom SPIR-V compiler
 - `DXR_OMM=OFF` - use legacy NvAPI implementation
-- `D3D_AGILITY_SDK_PATH=/custom/path/to/asdk` - custom path to *Agility SDK*.
 
 ## How to run
 
-- Run `3-Run OMM sample` script and answer the cmdline questions to set the runtime parameters
-- The executables can be found in `_Build`. The executable loads resources from `_Data`, therefore please run the samples with working directory set to the project root folder (needed pieces of the command line can be found in `3-Run OMM sample` script)
+- Run `3-Run OMM sample.bat` from the repository root and select the runtime options.
+- Executables are in `_Bin/Release` or `_Bin/Debug`. When launching them directly, set the working directory to the repository root so they can load assets from `_Data`.
 
 ## Command Line Arguments
 - If [Smart Command Line Arguments extension for Visual Studio](https://marketplace.visualstudio.com/items?itemName=MBulli.SmartCommandlineArguments) is installed, all command line arguments will be loaded into corresponding window
