@@ -21,7 +21,7 @@ endif()
 # Options
 option(DXR_OMM "Use DXR 1.2 API" ON)
 
-cmake_dependent_option(USE_MINIMAL_DATA "Use minimal '_Data' (90MB)" ON "GITHUB_CI" OFF)
+option(USE_MINIMAL_DATA "Use minimal '_Data' (90MB)" ${GITHUB_CI})
 cmake_dependent_option(RTXCR_INTEGRATION "Use RTXCR for hair and skin rendering, download sample scene" ON "NOT GITHUB_CI" OFF)
 
 set(SHADER_OUTPUT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/_Shaders" CACHE STRING "")
