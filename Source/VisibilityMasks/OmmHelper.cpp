@@ -456,7 +456,7 @@ void OpacityMicroMapsHelper::GetGpuBakerPrebuildInfo(OmmBakeGeometryDesc** queue
         memcpy(prebuildInfo.transientBufferSizes, ommBakerPrebuildInfo.transientBufferSizes, sizeof(uint64_t) * OMM_MAX_TRANSIENT_POOL_BUFFERS);
 
         queue[i]->outOmmIndexFormat = ommBakerPrebuildInfo.indexFormat;
-        queue[i]->outOmmIndexStride = (uint32_t)ommBakerPrebuildInfo.indexBufferSize / ommBakerPrebuildInfo.indexCount;
+        queue[i]->outOmmIndexStride = nri::nriGetFormatProps(ommBakerPrebuildInfo.indexFormat)->stride;
         queue[i]->outDescArrayHistogramCount = uint32_t(ommBakerPrebuildInfo.ommDescArrayHistogramSize / (uint64_t)sizeof(ommCpuOpacityMicromapUsageCount));
         queue[i]->outIndexHistogramCount = uint32_t(ommBakerPrebuildInfo.ommIndexHistogramSize / (uint64_t)sizeof(ommCpuOpacityMicromapUsageCount));
     }

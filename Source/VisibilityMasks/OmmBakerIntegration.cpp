@@ -622,7 +622,6 @@ void OmmBakerGpuIntegration::GetPrebuildInfo(InputGeometryDesc* geometryDesc, ui
         for (size_t j = 0; j < info.numTransientPoolBuffers; ++j)
             prebuildInfo.transientBufferSizes[j] = info.transientPoolBufferSizeInBytes[j];
 
-        prebuildInfo.indexCount = info.outOmmIndexCount;
         prebuildInfo.indexFormat = GetNriIndexFormat(info.outOmmIndexBufferFormat);
     }
 }

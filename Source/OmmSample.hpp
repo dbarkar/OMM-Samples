@@ -1108,6 +1108,11 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
 
 #pragma region[ OmmSample specific ]
     {
+        if (graphicsAPI == nri::GraphicsAPI::VK) {
+            m_OmmBakeDesc.cpuFlags.allow8bitIndices = false;
+            m_OmmBakeDesc.gpuFlags.allow8bitIndices = false;
+        }
+
         InitAlphaTestedGeometry();
         m_OmmHelper.Initialize(m_Device, m_DisableOmmBlasBuild);
         m_Profiler.Init(m_Device);

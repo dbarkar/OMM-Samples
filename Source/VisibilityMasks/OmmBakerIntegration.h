@@ -50,7 +50,6 @@ struct PrebuildInfo {
     uint64_t postBuildInfoSize;
     uint64_t transientBufferSizes[OMM_MAX_TRANSIENT_POOL_BUFFERS];
 
-    uint32_t indexCount;
     nri::Format indexFormat;
 };
 
