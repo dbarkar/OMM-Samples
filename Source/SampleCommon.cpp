@@ -208,6 +208,13 @@ void Sample::LatencySleep(uint32_t frameIndex) {
 void Sample::PrepareFrame(uint32_t frameIndex) {
     nri::nriBeginAnnotation("Prepare frame", nri::BGRA_UNUSED);
 
+#pragma region[ OmmSample specific ]
+    if (m_OmmUpdateTask.valid() && m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) == std::future_status::ready)
+        FinishOmmGeometryUpdate();
+    if (frameIndex == m_OmmBakeDesc.buildFrameId)
+        StartOmmGeometryUpdate(frameIndex);
+#pragma endregion
+
     m_ForceHistoryReset = false;
     m_SettingsPrev = m_Settings;
     m_Camera.SavePreviousState();
@@ -290,7 +297,7 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
                 ImGui::Text("Accelerate - MOUSE SCROLL");
             } else {
                 ImGui::Checkbox("Show all settings", &m_ShowFullSettings);
-                AppendOmmImguiSettings();
+                AppendOmmImguiSettings(frameIndex);
                 if (m_ShowFullSettings) {
                     // "Camera" section
                     ImGui::PushStyleColor(ImGuiCol_Text, UI_HEADER);

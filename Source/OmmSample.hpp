@@ -1,6 +1,11 @@
 // © 2022 NVIDIA Corporation
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <future>
 #include <map>
+#include <mutex>
 #include <set>
 #include "VisibilityMasks/OmmHelper.h"
 
@@ -703,8 +708,10 @@ private: // OMM:
     struct OmmNriContext;
     void InitAlphaTestedGeometry();
 
+    void FinishOmmGeometryUpdate();
+    void StartOmmGeometryUpdate(uint64_t fenceValue);
     void RebuildOmmGeometry();
-    void RebuildOmmGeometryAsync(uint32_t const* frameId);
+    void RebuildOmmGeometryAsync(uint64_t fenceValue);
     void OmmGeometryUpdate(OmmNriContext& context, bool doBatching);
 
     void FillOmmBakerInputs();
@@ -734,7 +741,7 @@ private: // OMM:
     void ReleaseMaskedGeometry();
     void ReleaseBakingResources();
 
-    void AppendOmmImguiSettings();
+    void AppendOmmImguiSettings(uint32_t frameIndex);
 
 private:
     struct OmmNriContext {
@@ -778,10 +785,14 @@ private:
 
     std::map<uint64_t, OmmBlas> m_InstanceMaskToMaskedBlasData;
     std::vector<OmmBlas> m_MaskedBlasses;
+    std::mutex m_OmmGeometryMutex;
+    std::future<void> m_OmmUpdateTask;
+    std::atomic<bool> m_OmmShuttingDown = false;
     ommhelper::OmmBakeDesc m_OmmBakeDesc = {};
+    ommhelper::OmmBakeDesc m_OmmPendingBakeDesc = {};
     std::string m_SceneName = "Scene";
     std::string m_OmmCacheFolderName = "_OmmCache";
-    uint32_t m_OmmUpdateProgress = 0;
+    std::atomic<uint32_t> m_OmmUpdateProgress = 0;
     bool m_EnableOmm = true;
     bool m_ShowFullSettings = false;
     bool m_IsOmmBakingActive = false;
@@ -798,14 +809,18 @@ private:
 Sample::~Sample() {
 
 #pragma region[ OmmSample specific ]
+    // Stop the baker before releasing resources it can access.
+    m_OmmShuttingDown.store(true);
+    FinishOmmGeometryUpdate();
+    if (NRI.HasCore())
+        NRI.DeviceWaitIdle(m_Device);
+
     m_Scene.UnloadTextureData();
     ReleaseMaskedGeometry();
     ReleaseBakingResources();
 #pragma endregion
 
     if (NRI.HasCore()) {
-
-        NRI.DeviceWaitIdle(m_Device);
 
 #pragma region[ OmmSample specific ]
         m_OmmHelper.Destroy();
@@ -1112,6 +1127,7 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
             m_OmmBakeDesc.cpuFlags.allow8bitIndices = false;
             m_OmmBakeDesc.gpuFlags.allow8bitIndices = false;
         }
+        m_OmmPendingBakeDesc = m_OmmBakeDesc;
 
         InitAlphaTestedGeometry();
         m_OmmHelper.Initialize(m_Device, m_DisableOmmBlasBuild);
@@ -1182,6 +1198,7 @@ void BindBuffersToMemory(NRIInterface& nri, nri::Device* device, nri::Buffer** b
 }
 
 nri::AccelerationStructure* Sample::GetMaskedBlas(uint64_t insatanceMask) {
+    std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
     const auto& it = m_InstanceMaskToMaskedBlasData.find(insatanceMask);
     if (it != m_InstanceMaskToMaskedBlasData.end())
         return it->second.blas;
@@ -1894,14 +1911,20 @@ inline void SubmitQueueWorkAndWait(const NRIInterface& NRI, nri::CommandBuffer* 
     nri::FenceSubmitDesc fenceSubmitDesc = {};
     fenceSubmitDesc.fence = fence;
     fenceSubmitDesc.stages = nri::StageBits::ALL;
-    fenceSubmitDesc.value = ++currentFenceValue;
+    fenceSubmitDesc.value = currentFenceValue + 1;
 
     nri::QueueSubmitDesc workSubmissionDesc = {};
     workSubmissionDesc.commandBuffers = &commandBuffer;
     workSubmissionDesc.commandBufferNum = 1;
     workSubmissionDesc.signalFences = &fenceSubmitDesc;
     workSubmissionDesc.signalFenceNum = 1;
-    NRI.QueueSubmit(*queue, workSubmissionDesc);
+    const nri::Result result = NRI.QueueSubmit(*queue, workSubmissionDesc);
+    if (result != nri::Result::SUCCESS) {
+        fprintf(stderr, "[FAIL][OMM] Bake queue submission failed (NRI result %d).\n", (int)result);
+        std::abort();
+    }
+
+    currentFenceValue = fenceSubmitDesc.value;
     NRI.Wait(*fence, currentFenceValue);
 }
 
@@ -2060,6 +2083,7 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
 
                 uint64_t mask = GetInstanceHash(m_OmmAlphaGeometry[id].meshIndex, m_OmmAlphaGeometry[id].materialIndex);
                 OmmBlas ommBlas = {buildDesc.outputs.blas, buildDesc.outputs.ommArray};
+                std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
                 m_InstanceMaskToMaskedBlasData.insert(std::make_pair(mask, ommBlas));
                 m_MaskedBlasses.push_back({buildDesc.outputs.blas, buildDesc.outputs.ommArray});
             }
@@ -2084,13 +2108,48 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
     m_OmmUpdateProgress = 0;
 }
 
-void Sample::RebuildOmmGeometryAsync(uint32_t const* frameId) {
-    uint32_t fistFrame = *frameId;
-    uint32_t endFrame = fistFrame + GetOptimalSwapChainTextureNum();
-    m_InstanceMaskToMaskedBlasData.clear(); // stop using masked geometry here
+void Sample::FinishOmmGeometryUpdate() {
+    if (!m_OmmUpdateTask.valid())
+        return;
 
-    while (*frameId < endFrame)
+    try {
+        m_OmmUpdateTask.get();
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[FAIL][OMM] Bake failed: %s\n", e.what());
+        std::abort();
+    } catch (...) {
+        fprintf(stderr, "[FAIL][OMM] Bake failed with an unknown exception.\n");
+        std::abort();
+    }
+}
+
+void Sample::StartOmmGeometryUpdate(uint64_t fenceValue) {
+    if (m_OmmUpdateTask.valid() && m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) != std::future_status::ready)
+        return;
+
+    FinishOmmGeometryUpdate();
+    m_OmmBakeDesc = m_OmmPendingBakeDesc;
+    bool isCpuBaker = m_OmmBakeDesc.type == ommhelper::OmmBakerType::CPU;
+    if (m_EnableAsync || isCpuBaker) {
+        {
+            std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+            m_InstanceMaskToMaskedBlasData.clear();
+        }
+        m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, fenceValue);
+    } else
+        RebuildOmmGeometry();
+}
+
+void Sample::RebuildOmmGeometryAsync(uint64_t fenceValue) {
+    // The lookup was cleared before gathering this frame's instances. Retire prior GPU work.
+    while (NRI.GetFenceValue(*m_FrameFence) < fenceValue) {
+        if (m_OmmShuttingDown.load())
+            return;
         Sleep(1);
+    }
+
+    if (m_OmmShuttingDown.load())
+        return;
 
     OmmGeometryUpdate(m_OmmComputeContext, false);
 }
@@ -2101,11 +2160,15 @@ void Sample::RebuildOmmGeometry() {
 }
 
 void Sample::ReleaseMaskedGeometry() {
-    for (auto& resource : m_MaskedBlasses)
+    std::vector<OmmBlas> maskedBlasses;
+    {
+        std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+        m_InstanceMaskToMaskedBlasData.clear();
+        maskedBlasses.swap(m_MaskedBlasses);
+    }
+    for (auto& resource : maskedBlasses)
         m_OmmHelper.DestroyMaskedGeometry(resource.blas, resource.ommArray);
 
-    m_InstanceMaskToMaskedBlasData.clear();
-    m_MaskedBlasses.clear();
     m_OmmHelper.ReleaseGeometryMemory();
 }
 
@@ -2191,8 +2254,8 @@ bool IsRebuildAvailable(ommhelper::OmmBakeDesc& updated, ommhelper::OmmBakeDesc&
     return result;
 }
 
-void Sample::AppendOmmImguiSettings() {
-    static ommhelper::OmmBakeDesc bakeDesc = m_OmmBakeDesc;
+void Sample::AppendOmmImguiSettings(uint32_t frameIndex) {
+    ommhelper::OmmBakeDesc& bakeDesc = m_OmmPendingBakeDesc;
 
     ImGui::PushStyleColor(ImGuiCol_Text, UI_HEADER);
     ImGui::PushStyleColor(ImGuiCol_Header, UI_HEADER_BACKGROUND);
@@ -2204,7 +2267,10 @@ void Sample::AppendOmmImguiSettings() {
         if (isUnfolded) {
             ImGui::Checkbox("Enable OMMs", &m_EnableOmm);
             ImGui::SameLine();
-            ImGui::Text("[Masked Geometry Num: %llu]", m_MaskedBlasses.size());
+            {
+                std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+                ImGui::Text("[Masked Geometry Num: %llu]", m_MaskedBlasses.size());
+            }
             ImVec4 color = m_Settings.highLightAhs ? ImVec4(1.0f, 0.0f, 1.0f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::Checkbox("Highlight AHS", &m_Settings.highLightAhs);
@@ -2321,40 +2387,29 @@ void Sample::AppendOmmImguiSettings() {
 
             bool isRebuildAvailable = IsRebuildAvailable(bakeDesc, m_OmmBakeDesc);
 
-            static std::future<void> asyncUpdateTask = {};
             bool isAsyncActive = false;
-            if (asyncUpdateTask.valid())
-                isAsyncActive = asyncUpdateTask.wait_for(std::chrono::microseconds(0)) != std::future_status::ready && asyncUpdateTask.valid();
+            if (m_OmmUpdateTask.valid())
+                isAsyncActive = m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) != std::future_status::ready;
 
             const static ImU32 greyColor = ImGui::GetColorU32(ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
             const static ImU32 greenColor = ImGui::GetColorU32(ImVec4(0.0f, 0.6f, 0.0f, 1.0f));
             const static ImU32 redColor = ImGui::GetColorU32(ImVec4(0.6f, 0.0f, 0.0f, 1.0f));
 
-            static uint32_t frameId = 0;
-            bool forceRebuild = frameId == m_OmmBakeDesc.buildFrameId;
             {
                 ImU32 buttonColor = isRebuildAvailable ? greenColor : greyColor;
                 buttonColor = isAsyncActive ? redColor : buttonColor;
 
                 ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_Button, buttonColor);
-                if ((ImGui::Button("Bake OMMs") || forceRebuild) && !isAsyncActive) {
-                    m_OmmBakeDesc = bakeDesc;
-
-                    bool launchAsyncTask = (m_EnableAsync && !isCpuBaker) || isCpuBaker;
-                    if (launchAsyncTask)
-                        asyncUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, &frameId);
-                    else
-                        RebuildOmmGeometry();
-                }
+                if (ImGui::Button("Bake OMMs") && !isAsyncActive)
+                    StartOmmGeometryUpdate(frameIndex);
                 ImGui::PopStyleColor();
 
                 ImGui::SameLine();
                 ImGui::Checkbox("Use OMM Cache", &enableCaching);
 
                 if (isAsyncActive)
-                    ImGui::ProgressBar(float(m_OmmUpdateProgress) / float(m_OmmAlphaGeometry.size()));
+                    ImGui::ProgressBar(float(m_OmmUpdateProgress.load()) / float(m_OmmAlphaGeometry.size()));
             }
-            ++frameId;
         }
     }
     ImGui::PopID();
