@@ -93,7 +93,7 @@ echo 3 - performance
 echo 4 - balanced
 echo 5 - quality
 :CHOOSE_DLSS
-    set /P M=DLSS mode [1-6]:
+    set /P M=DLSS mode [1-5]:
     if %M%==1 (
         set DLSS=-1
         goto SCENE

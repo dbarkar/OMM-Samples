@@ -10,6 +10,9 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #include "OmmBakerIntegration.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #define NRI_ABORT_ON_FAILURE(result) \
     if ((result) != nri::Result::SUCCESS) \
