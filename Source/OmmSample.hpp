@@ -1,5 +1,8 @@
 // © 2022 NVIDIA Corporation
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <future>
 #include <map>
 #include <mutex>
@@ -705,6 +708,7 @@ private: // OMM:
     struct OmmNriContext;
     void InitAlphaTestedGeometry();
 
+    void FinishOmmGeometryUpdate();
     void StartOmmGeometryUpdate(uint64_t fenceValue);
     void RebuildOmmGeometry();
     void RebuildOmmGeometryAsync(uint64_t fenceValue);
@@ -807,8 +811,7 @@ Sample::~Sample() {
 #pragma region[ OmmSample specific ]
     // Stop the baker before releasing resources it can access.
     m_OmmShuttingDown.store(true);
-    if (m_OmmUpdateTask.valid())
-        m_OmmUpdateTask.wait();
+    FinishOmmGeometryUpdate();
     if (NRI.HasCore())
         NRI.DeviceWaitIdle(m_Device);
 
@@ -2090,10 +2093,26 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
     m_OmmUpdateProgress = 0;
 }
 
+void Sample::FinishOmmGeometryUpdate() {
+    if (!m_OmmUpdateTask.valid())
+        return;
+
+    try {
+        m_OmmUpdateTask.get();
+    } catch (const std::exception& e) {
+        fprintf(stderr, "[FAIL][OMM] Bake failed: %s\n", e.what());
+        std::abort();
+    } catch (...) {
+        fprintf(stderr, "[FAIL][OMM] Bake failed with an unknown exception.\n");
+        std::abort();
+    }
+}
+
 void Sample::StartOmmGeometryUpdate(uint64_t fenceValue) {
     if (m_OmmUpdateTask.valid() && m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) != std::future_status::ready)
         return;
 
+    FinishOmmGeometryUpdate();
     m_OmmBakeDesc = m_OmmPendingBakeDesc;
     bool isCpuBaker = m_OmmBakeDesc.type == ommhelper::OmmBakerType::CPU;
     if (m_EnableAsync || isCpuBaker) {

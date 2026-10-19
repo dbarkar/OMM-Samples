@@ -209,6 +209,8 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
     nri::nriBeginAnnotation("Prepare frame", nri::BGRA_UNUSED);
 
 #pragma region[ OmmSample specific ]
+    if (m_OmmUpdateTask.valid() && m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) == std::future_status::ready)
+        FinishOmmGeometryUpdate();
     if (frameIndex == m_OmmBakeDesc.buildFrameId)
         StartOmmGeometryUpdate(frameIndex);
 #pragma endregion
