@@ -2,6 +2,7 @@
 #include <atomic>
 #include <future>
 #include <map>
+#include <mutex>
 #include <set>
 #include "VisibilityMasks/OmmHelper.h"
 
@@ -779,13 +780,14 @@ private:
 
     std::map<uint64_t, OmmBlas> m_InstanceMaskToMaskedBlasData;
     std::vector<OmmBlas> m_MaskedBlasses;
+    std::mutex m_OmmGeometryMutex;
     std::future<void> m_OmmUpdateTask;
     std::atomic<uint32_t> m_OmmFrameId = 0;
     std::atomic<bool> m_OmmShuttingDown = false;
     ommhelper::OmmBakeDesc m_OmmBakeDesc = {};
     std::string m_SceneName = "Scene";
     std::string m_OmmCacheFolderName = "_OmmCache";
-    uint32_t m_OmmUpdateProgress = 0;
+    std::atomic<uint32_t> m_OmmUpdateProgress = 0;
     bool m_EnableOmm = true;
     bool m_ShowFullSettings = false;
     bool m_IsOmmBakingActive = false;
@@ -1186,6 +1188,7 @@ void BindBuffersToMemory(NRIInterface& nri, nri::Device* device, nri::Buffer** b
 }
 
 nri::AccelerationStructure* Sample::GetMaskedBlas(uint64_t insatanceMask) {
+    std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
     const auto& it = m_InstanceMaskToMaskedBlasData.find(insatanceMask);
     if (it != m_InstanceMaskToMaskedBlasData.end())
         return it->second.blas;
@@ -2060,6 +2063,7 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
 
                 uint64_t mask = GetInstanceHash(m_OmmAlphaGeometry[id].meshIndex, m_OmmAlphaGeometry[id].materialIndex);
                 OmmBlas ommBlas = {buildDesc.outputs.blas, buildDesc.outputs.ommArray};
+                std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
                 m_InstanceMaskToMaskedBlasData.insert(std::make_pair(mask, ommBlas));
                 m_MaskedBlasses.push_back({buildDesc.outputs.blas, buildDesc.outputs.ommArray});
             }
@@ -2086,7 +2090,10 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
 
 void Sample::RebuildOmmGeometryAsync() {
     const uint32_t endFrame = m_OmmFrameId.load() + GetOptimalSwapChainTextureNum();
-    m_InstanceMaskToMaskedBlasData.clear(); // stop using masked geometry here
+    {
+        std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+        m_InstanceMaskToMaskedBlasData.clear(); // stop using masked geometry here
+    }
 
     while (m_OmmFrameId.load() < endFrame) {
         if (m_OmmShuttingDown.load())
@@ -2106,11 +2113,15 @@ void Sample::RebuildOmmGeometry() {
 }
 
 void Sample::ReleaseMaskedGeometry() {
-    for (auto& resource : m_MaskedBlasses)
+    std::vector<OmmBlas> maskedBlasses;
+    {
+        std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+        m_InstanceMaskToMaskedBlasData.clear();
+        maskedBlasses.swap(m_MaskedBlasses);
+    }
+    for (auto& resource : maskedBlasses)
         m_OmmHelper.DestroyMaskedGeometry(resource.blas, resource.ommArray);
 
-    m_InstanceMaskToMaskedBlasData.clear();
-    m_MaskedBlasses.clear();
     m_OmmHelper.ReleaseGeometryMemory();
 }
 
@@ -2209,7 +2220,10 @@ void Sample::AppendOmmImguiSettings() {
         if (isUnfolded) {
             ImGui::Checkbox("Enable OMMs", &m_EnableOmm);
             ImGui::SameLine();
-            ImGui::Text("[Masked Geometry Num: %llu]", m_MaskedBlasses.size());
+            {
+                std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+                ImGui::Text("[Masked Geometry Num: %llu]", m_MaskedBlasses.size());
+            }
             ImVec4 color = m_Settings.highLightAhs ? ImVec4(1.0f, 0.0f, 1.0f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
             ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::Checkbox("Highlight AHS", &m_Settings.highLightAhs);
@@ -2355,7 +2369,7 @@ void Sample::AppendOmmImguiSettings() {
                 ImGui::Checkbox("Use OMM Cache", &enableCaching);
 
                 if (isAsyncActive)
-                    ImGui::ProgressBar(float(m_OmmUpdateProgress) / float(m_OmmAlphaGeometry.size()));
+                    ImGui::ProgressBar(float(m_OmmUpdateProgress.load()) / float(m_OmmAlphaGeometry.size()));
             }
             ++m_OmmFrameId;
         }
