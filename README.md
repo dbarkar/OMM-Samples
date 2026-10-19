@@ -3,7 +3,6 @@
 *Opacity Micro-Map sample* demostrates usage of Opacity Micro-Maps in Raytracing. Sample details:
 - Opacity Micro-Map SDK is used for OMM baking. Both CPU baker and GPU baker are supported in the sample: https://github.com/NVIDIA-RTX/OMM
 - Rendering and Denoising are based on NRDSample: https://github.com/NVIDIAGameWorks/NRDSample
-- The sample primarily uses the DXR 1.2 API, with NvAPI available as a legacy fallback option.
 
 **Note:** The DXR 1.2 API requires a preview driver, available at: https://developer.nvidia.com/downloads/shadermodel6-9-preview-driver
 
@@ -25,7 +24,6 @@
 - `RTXCR_INTEGRATION=OFF` - disable the optional hair and skin rendering integration and Claire assets
 - `SHADERMAKE_FIND_DXC=OFF` with `SHADERMAKE_DXC_PATH=C:/path/to/dxc.exe` - use a custom DXIL compiler
 - `SHADERMAKE_FIND_DXC_VK=OFF` with `SHADERMAKE_DXC_VK_PATH=C:/path/to/dxc.exe` - use a custom SPIR-V compiler
-- `DXR_OMM=OFF` - use legacy NvAPI implementation
 
 ## How to run
 
