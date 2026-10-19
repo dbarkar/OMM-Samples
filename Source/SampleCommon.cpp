@@ -208,6 +208,11 @@ void Sample::LatencySleep(uint32_t frameIndex) {
 void Sample::PrepareFrame(uint32_t frameIndex) {
     nri::nriBeginAnnotation("Prepare frame", nri::BGRA_UNUSED);
 
+#pragma region[ OmmSample specific ]
+    if (frameIndex == m_OmmBakeDesc.buildFrameId)
+        StartOmmGeometryUpdate(frameIndex);
+#pragma endregion
+
     m_ForceHistoryReset = false;
     m_SettingsPrev = m_Settings;
     m_Camera.SavePreviousState();

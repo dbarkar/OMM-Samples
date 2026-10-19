@@ -705,6 +705,7 @@ private: // OMM:
     struct OmmNriContext;
     void InitAlphaTestedGeometry();
 
+    void StartOmmGeometryUpdate(uint64_t fenceValue);
     void RebuildOmmGeometry();
     void RebuildOmmGeometryAsync(uint64_t fenceValue);
     void OmmGeometryUpdate(OmmNriContext& context, bool doBatching);
@@ -784,6 +785,7 @@ private:
     std::future<void> m_OmmUpdateTask;
     std::atomic<bool> m_OmmShuttingDown = false;
     ommhelper::OmmBakeDesc m_OmmBakeDesc = {};
+    ommhelper::OmmBakeDesc m_OmmPendingBakeDesc = {};
     std::string m_SceneName = "Scene";
     std::string m_OmmCacheFolderName = "_OmmCache";
     std::atomic<uint32_t> m_OmmUpdateProgress = 0;
@@ -1117,6 +1119,7 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
             m_OmmBakeDesc.cpuFlags.allow8bitIndices = false;
             m_OmmBakeDesc.gpuFlags.allow8bitIndices = false;
         }
+        m_OmmPendingBakeDesc = m_OmmBakeDesc;
 
         InitAlphaTestedGeometry();
         m_OmmHelper.Initialize(m_Device, m_DisableOmmBlasBuild);
@@ -2087,6 +2090,22 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
     m_OmmUpdateProgress = 0;
 }
 
+void Sample::StartOmmGeometryUpdate(uint64_t fenceValue) {
+    if (m_OmmUpdateTask.valid() && m_OmmUpdateTask.wait_for(std::chrono::microseconds(0)) != std::future_status::ready)
+        return;
+
+    m_OmmBakeDesc = m_OmmPendingBakeDesc;
+    bool isCpuBaker = m_OmmBakeDesc.type == ommhelper::OmmBakerType::CPU;
+    if (m_EnableAsync || isCpuBaker) {
+        {
+            std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+            m_InstanceMaskToMaskedBlasData.clear();
+        }
+        m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, fenceValue);
+    } else
+        RebuildOmmGeometry();
+}
+
 void Sample::RebuildOmmGeometryAsync(uint64_t fenceValue) {
     // The lookup was cleared before gathering this frame's instances. Retire prior GPU work.
     while (NRI.GetFenceValue(*m_FrameFence) < fenceValue) {
@@ -2202,7 +2221,7 @@ bool IsRebuildAvailable(ommhelper::OmmBakeDesc& updated, ommhelper::OmmBakeDesc&
 }
 
 void Sample::AppendOmmImguiSettings(uint32_t frameIndex) {
-    static ommhelper::OmmBakeDesc bakeDesc = m_OmmBakeDesc;
+    ommhelper::OmmBakeDesc& bakeDesc = m_OmmPendingBakeDesc;
 
     ImGui::PushStyleColor(ImGuiCol_Text, UI_HEADER);
     ImGui::PushStyleColor(ImGuiCol_Header, UI_HEADER_BACKGROUND);
@@ -2342,25 +2361,13 @@ void Sample::AppendOmmImguiSettings(uint32_t frameIndex) {
             const static ImU32 greenColor = ImGui::GetColorU32(ImVec4(0.0f, 0.6f, 0.0f, 1.0f));
             const static ImU32 redColor = ImGui::GetColorU32(ImVec4(0.6f, 0.0f, 0.0f, 1.0f));
 
-            bool forceRebuild = frameIndex == m_OmmBakeDesc.buildFrameId;
             {
                 ImU32 buttonColor = isRebuildAvailable ? greenColor : greyColor;
                 buttonColor = isAsyncActive ? redColor : buttonColor;
 
                 ImGui::PushStyleColor(ImGuiCol_::ImGuiCol_Button, buttonColor);
-                if ((ImGui::Button("Bake OMMs") || forceRebuild) && !isAsyncActive) {
-                    m_OmmBakeDesc = bakeDesc;
-
-                    bool launchAsyncTask = (m_EnableAsync && !isCpuBaker) || isCpuBaker;
-                    if (launchAsyncTask) {
-                        {
-                            std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-                            m_InstanceMaskToMaskedBlasData.clear();
-                        }
-                        m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, uint64_t(frameIndex));
-                    } else
-                        RebuildOmmGeometry();
-                }
+                if (ImGui::Button("Bake OMMs") && !isAsyncActive)
+                    StartOmmGeometryUpdate(frameIndex);
                 ImGui::PopStyleColor();
 
                 ImGui::SameLine();
