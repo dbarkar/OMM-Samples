@@ -706,7 +706,7 @@ private: // OMM:
     void InitAlphaTestedGeometry();
 
     void RebuildOmmGeometry();
-    void RebuildOmmGeometryAsync();
+    void RebuildOmmGeometryAsync(uint64_t fenceValue);
     void OmmGeometryUpdate(OmmNriContext& context, bool doBatching);
 
     void FillOmmBakerInputs();
@@ -736,7 +736,7 @@ private: // OMM:
     void ReleaseMaskedGeometry();
     void ReleaseBakingResources();
 
-    void AppendOmmImguiSettings();
+    void AppendOmmImguiSettings(uint32_t frameIndex);
 
 private:
     struct OmmNriContext {
@@ -782,7 +782,6 @@ private:
     std::vector<OmmBlas> m_MaskedBlasses;
     std::mutex m_OmmGeometryMutex;
     std::future<void> m_OmmUpdateTask;
-    std::atomic<uint32_t> m_OmmFrameId = 0;
     std::atomic<bool> m_OmmShuttingDown = false;
     ommhelper::OmmBakeDesc m_OmmBakeDesc = {};
     std::string m_SceneName = "Scene";
@@ -2088,14 +2087,9 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
     m_OmmUpdateProgress = 0;
 }
 
-void Sample::RebuildOmmGeometryAsync() {
-    const uint32_t endFrame = m_OmmFrameId.load() + GetOptimalSwapChainTextureNum();
-    {
-        std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-        m_InstanceMaskToMaskedBlasData.clear(); // stop using masked geometry here
-    }
-
-    while (m_OmmFrameId.load() < endFrame) {
+void Sample::RebuildOmmGeometryAsync(uint64_t fenceValue) {
+    // The lookup was cleared before gathering this frame's instances. Retire prior GPU work.
+    while (NRI.GetFenceValue(*m_FrameFence) < fenceValue) {
         if (m_OmmShuttingDown.load())
             return;
         Sleep(1);
@@ -2207,7 +2201,7 @@ bool IsRebuildAvailable(ommhelper::OmmBakeDesc& updated, ommhelper::OmmBakeDesc&
     return result;
 }
 
-void Sample::AppendOmmImguiSettings() {
+void Sample::AppendOmmImguiSettings(uint32_t frameIndex) {
     static ommhelper::OmmBakeDesc bakeDesc = m_OmmBakeDesc;
 
     ImGui::PushStyleColor(ImGuiCol_Text, UI_HEADER);
@@ -2348,7 +2342,7 @@ void Sample::AppendOmmImguiSettings() {
             const static ImU32 greenColor = ImGui::GetColorU32(ImVec4(0.0f, 0.6f, 0.0f, 1.0f));
             const static ImU32 redColor = ImGui::GetColorU32(ImVec4(0.6f, 0.0f, 0.0f, 1.0f));
 
-            bool forceRebuild = m_OmmFrameId.load() == m_OmmBakeDesc.buildFrameId;
+            bool forceRebuild = frameIndex == m_OmmBakeDesc.buildFrameId;
             {
                 ImU32 buttonColor = isRebuildAvailable ? greenColor : greyColor;
                 buttonColor = isAsyncActive ? redColor : buttonColor;
@@ -2358,9 +2352,13 @@ void Sample::AppendOmmImguiSettings() {
                     m_OmmBakeDesc = bakeDesc;
 
                     bool launchAsyncTask = (m_EnableAsync && !isCpuBaker) || isCpuBaker;
-                    if (launchAsyncTask)
-                        m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this);
-                    else
+                    if (launchAsyncTask) {
+                        {
+                            std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
+                            m_InstanceMaskToMaskedBlasData.clear();
+                        }
+                        m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, uint64_t(frameIndex));
+                    } else
                         RebuildOmmGeometry();
                 }
                 ImGui::PopStyleColor();
@@ -2371,7 +2369,6 @@ void Sample::AppendOmmImguiSettings() {
                 if (isAsyncActive)
                     ImGui::ProgressBar(float(m_OmmUpdateProgress.load()) / float(m_OmmAlphaGeometry.size()));
             }
-            ++m_OmmFrameId;
         }
     }
     ImGui::PopID();

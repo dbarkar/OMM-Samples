@@ -290,7 +290,7 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
                 ImGui::Text("Accelerate - MOUSE SCROLL");
             } else {
                 ImGui::Checkbox("Show all settings", &m_ShowFullSettings);
-                AppendOmmImguiSettings();
+                AppendOmmImguiSettings(frameIndex);
                 if (m_ShowFullSettings) {
                     // "Camera" section
                     ImGui::PushStyleColor(ImGuiCol_Text, UI_HEADER);
