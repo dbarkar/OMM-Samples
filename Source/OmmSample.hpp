@@ -924,14 +924,13 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
     NRI_ABORT_ON_FAILURE(nri::nriGetInterface(*m_Device, NRI_INTERFACE(nri::UpscalerInterface), (nri::UpscalerInterface*)&NRI));
 
 #pragma region[ OmmSample specific ]
-    #if DXR_OMM
+    #ifdef _WIN32
     {
         nri::DeviceDesc deviceDesc = NRI.GetDeviceDesc(*m_Device);
         if (deviceDesc.graphicsAPI == nri::GraphicsAPI::D3D12 && deviceDesc.tiers.rayTracing < 3) {
             const char* errorMessage =
                 "D3D12_RAYTRACING_TIER_1_2 is required for Opacity Micromaps.\n\n"
-                "Please make sure your GPU supports this tier and update the driver to the latest (NVGRD 595+).\n\n"
-                "Or disable DXR_OMM in CmakeLisit.txt to use NVAPI on NVGPU";
+                "Please make sure your GPU supports this tier and update the driver to the latest (NVGRD 595+).";
             MessageBoxA(nullptr, errorMessage, "DXR 1.2 Support Required", MB_OK | MB_ICONERROR);
             NRI_ABORT_ON_FALSE(false);
         }
@@ -1118,9 +1117,9 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
 
 #pragma region[ OmmSample specific ]
     {
-        if (graphicsAPI == nri::GraphicsAPI::VK) {
-            m_OmmBakeDesc.cpuFlags.allow8bitIndices = false;
-            m_OmmBakeDesc.gpuFlags.allow8bitIndices = false;
+        if (graphicsAPI == nri::GraphicsAPI::D3D12) {
+            m_OmmBakeDesc.cpuFlags.allow8bitIndices = true;
+            m_OmmBakeDesc.gpuFlags.allow8bitIndices = true;
         }
         m_OmmPendingBakeDesc = m_OmmBakeDesc;
 
@@ -1147,16 +1146,6 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
             m_Settings.exposure = 18.0f;
         }
         m_Camera.Initialize(cameraInitialPos, lookAtPos, CAMERA_RELATIVE);
-
-        if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12) {
-            std::string windowTitle = std::string(glfwGetWindowTitle(m_Window));
-#if DXR_OMM
-            windowTitle += " [DXR 1.2]";
-#else
-            windowTitle += " [NVAPI]";
-#endif
-            glfwSetWindowTitle(m_Window, windowTitle.c_str());
-        }
     }
 #pragma endregion
 

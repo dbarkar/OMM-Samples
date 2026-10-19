@@ -19,8 +19,6 @@ else()
 endif()
 
 # Options
-option(DXR_OMM "Use DXR 1.2 API" ON)
-
 option(USE_MINIMAL_DATA "Use minimal '_Data' (90MB)" ${GITHUB_CI})
 cmake_dependent_option(RTXCR_INTEGRATION "Use RTXCR for hair and skin rendering, download sample scene" ON "NOT GITHUB_CI" OFF)
 
@@ -164,10 +162,7 @@ source_group("" FILES ${OMM_SAMPLE_SOURCE})
 
 add_executable(${PROJECT_NAME} ${OMM_SAMPLE_SOURCE})
 
-if (DXR_OMM)
-
-    target_compile_definitions(${PROJECT_NAME} PRIVATE DXR_OMM=1)
-
+if(WIN32)
     set(NRI_AGILITY_SDK_VERSION_MAJOR "619" CACHE STRING "" FORCE)
     set(NRI_AGILITY_SDK_VERSION_MINOR "1" CACHE STRING "" FORCE)
     set(ASDK_NUPKG "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.${NRI_AGILITY_SDK_VERSION_MAJOR}.${NRI_AGILITY_SDK_VERSION_MINOR}")
@@ -181,31 +176,6 @@ if (DXR_OMM)
     )
 
     message(STATUS "AgilitySDK: v1.${NRI_AGILITY_SDK_VERSION_MAJOR}.${NRI_AGILITY_SDK_VERSION_MINOR}")
-
-else()
-    # NVAPI
-    set(NVAPI_DEP)
-    FetchContent_Declare(
-        nvapi
-        GIT_REPOSITORY https://github.com/NVIDIA/nvapi.git
-        GIT_TAG main
-        GIT_SHALLOW 1
-    )
-    list(APPEND NVAPI_DEP nvapi)
-
-    if(NVAPI_DEP)
-        message(STATUS "Downloading ${NVAPI_DEP}")
-        FetchContent_MakeAvailable(${NVAPI_DEP})
-    endif()
-
-    find_library(NVAPI_LIB NAMES nvapi64 nvapi PATHS "${nvapi_SOURCE_DIR}/amd64" REQUIRED)
-    if (NVAPI_LIB)
-        set(NVAPI_LIB_PATH "${nvapi_SOURCE_DIR}/amd64/nvapi64.lib")
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${NVAPI_LIB_PATH})
-        target_include_directories(${PROJECT_NAME} PRIVATE "${nvapi_SOURCE_DIR}")
-    else()
-        message(FATAL_ERROR "Can't find NVAPI64 LIB")
-    endif()
 endif()
 
 # External/NRIFramework
@@ -221,7 +191,7 @@ endif()
 
 add_subdirectory("External/NRIFramework")
 
-if(DXR_OMM AND NRI_ENABLE_AGILITY_SDK_SUPPORT)
+if(WIN32 AND NRI_ENABLE_AGILITY_SDK_SUPPORT)
     FetchContent_GetProperties(agilitysdk)
     target_include_directories(${PROJECT_NAME} PRIVATE "${agilitysdk_SOURCE_DIR}")
 endif()

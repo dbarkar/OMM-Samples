@@ -11,13 +11,7 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #pragma once
 
 #include <dxgi1_6.h>
-
-#if DXR_OMM
-#    include "build/native/include/d3d12.h"
-#else
-#    include <d3d12.h>
-#    include "nvapi.h"
-#endif
+#include "build/native/include/d3d12.h"
 
 #include <vulkan/vulkan.h>
 #include <array>
@@ -62,11 +56,7 @@ struct CpuBakerFlags {
     bool enableDuplicateDetection = true;
     bool enableNearDuplicateDetection = false;
     bool force32bitIndices = false;
-#if DXR_OMM
-    bool allow8bitIndices = true;
-#else
     bool allow8bitIndices = false;
-#endif
 };
 
 struct GpuBakerFlags {
@@ -75,11 +65,7 @@ struct GpuBakerFlags {
     bool enableTexCoordDeduplication = true;
     bool force32bitIndices = false;
     bool computeOnlyWorkload = true;
-#if DXR_OMM
-    bool allow8bitIndices = true;
-#else
     bool allow8bitIndices = false;
-#endif
 };
 
 struct OmmBakeDesc {

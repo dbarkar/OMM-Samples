@@ -79,11 +79,6 @@ void OpacityMicroMapsHelper::Destroy() {
 
     if(m_Device5)
         m_Device5->Release();
-
-#if !DXR_OMM
-    if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12)
-        NvAPI_Unload();
-#endif
 }
 
 #pragma region[ Utils ]
@@ -173,7 +168,6 @@ inline ommTextureAddressMode GetOmmAddressingMode(nri::AddressMode mode) {
 void OpacityMicroMapsHelper::ConvertUsageCountsToApiFormat(uint8_t* outFormattedBuffer, size_t& outSize, const uint8_t* bakerOutputBuffer, size_t bakerOutputBufferSize) {
     size_t stride = 0;
     if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12) {
-#if DXR_OMM
         stride = sizeof(D3D12_RAYTRACING_OPACITY_MICROMAP_HISTOGRAM_ENTRY);
 
         size_t countsNum = bakerOutputBufferSize / sizeof(ommCpuOpacityMicromapUsageCount);
@@ -189,23 +183,6 @@ void OpacityMicroMapsHelper::ConvertUsageCountsToApiFormat(uint8_t* outFormatted
             sanitizedUsageCounts.push_back(usageDesc);
         }
         memcpy(outFormattedBuffer, sanitizedUsageCounts.data(), outSize);
-#else
-        stride = sizeof(_NVAPI_D3D12_RAYTRACING_OPACITY_MICROMAP_USAGE_COUNT);
-
-        size_t countsNum = bakerOutputBufferSize / sizeof(ommCpuOpacityMicromapUsageCount);
-        outSize = countsNum * stride;
-
-        if (!outFormattedBuffer)
-            return;
-
-        std::vector<_NVAPI_D3D12_RAYTRACING_OPACITY_MICROMAP_USAGE_COUNT> sanitizedUsageCounts;
-        ommCpuOpacityMicromapUsageCount* ommData = (ommCpuOpacityMicromapUsageCount*)bakerOutputBuffer;
-        for (size_t i = 0; i < countsNum; ++i) {
-            _NVAPI_D3D12_RAYTRACING_OPACITY_MICROMAP_USAGE_COUNT usageDesc = {ommData[i].count, ommData[i].subdivisionLevel, (NVAPI_D3D12_RAYTRACING_OPACITY_MICROMAP_FORMAT)ommData[i].format};
-            sanitizedUsageCounts.push_back(usageDesc);
-        }
-        memcpy(outFormattedBuffer, sanitizedUsageCounts.data(), outSize);
-#endif
     } else {
         stride = sizeof(VkMicromapUsageEXT);
 
