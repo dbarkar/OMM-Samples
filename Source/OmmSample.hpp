@@ -725,9 +725,9 @@ private: // OMM:
     void CreateAndBindGpuBakerArrayDataBuffer(const OmmGpuBakerPrebuildMemoryStats& memoryStats);
     void CreateAndBindGpuBakerReadbackBuffer(const OmmGpuBakerPrebuildMemoryStats& memoryStats);
 
-    inline uint64_t GetInstanceHash(uint32_t meshId, uint32_t materialId) {
-        return uint64_t(meshId) << 32 | uint64_t(materialId);
-    };
+    static uint64_t GetMeshMaterialKey(uint32_t meshIndex, uint32_t materialIndex) {
+        return uint64_t(meshIndex) << 32 | uint64_t(materialIndex);
+    }
 
     inline std::string GetOmmCacheFilename() {
         return m_OmmCacheFolderName + std::string("/") + m_SceneName;
@@ -736,7 +736,7 @@ private: // OMM:
     void InitializeOmmGeometryFromCache(const OmmBatch& batch, std::vector<ommhelper::OmmBakeGeometryDesc*>& outBakeQueue);
     void SaveMaskCache(const OmmBatch& batch);
 
-    nri::AccelerationStructure* GetMaskedBlas(uint64_t insatanceMask);
+    nri::AccelerationStructure* GetMaskedBlas(uint64_t meshMaterialKey);
 
     void ReleaseMaskedGeometry();
     void ReleaseBakingResources();
@@ -783,7 +783,7 @@ private:
         nri::Buffer* ommArray;
     };
 
-    std::map<uint64_t, OmmBlas> m_InstanceMaskToMaskedBlasData;
+    std::map<uint64_t, OmmBlas> m_MaskedBlasByMeshMaterial;
     std::vector<OmmBlas> m_MaskedBlasses;
     std::mutex m_OmmGeometryMutex;
     std::future<void> m_OmmUpdateTask;
@@ -1186,49 +1186,40 @@ void BindBuffersToMemory(NRIInterface& nri, nri::Device* device, nri::Buffer** b
     NRI_ABORT_ON_FAILURE(nri.AllocateAndBindMemory(*device, resourceGroupDesc, memories.data() + allocationOffset));
 }
 
-nri::AccelerationStructure* Sample::GetMaskedBlas(uint64_t insatanceMask) {
+nri::AccelerationStructure* Sample::GetMaskedBlas(uint64_t meshMaterialKey) {
     std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-    const auto& it = m_InstanceMaskToMaskedBlasData.find(insatanceMask);
-    if (it != m_InstanceMaskToMaskedBlasData.end())
+    const auto& it = m_MaskedBlasByMeshMaterial.find(meshMaterialKey);
+    if (it != m_MaskedBlasByMeshMaterial.end())
         return it->second.blas;
     return nullptr;
 }
 
-std::vector<uint32_t> FilterOutAlphaTestedGeometry(const utils::Scene& scene) { // Filter out alphaOpaque geometry by mesh and material IDs
-    std::vector<uint32_t> result;
-    std::set<uint64_t> processedCombinations;
-    for (uint32_t instaceId = 0; instaceId < (uint32_t)scene.instances.size(); ++instaceId) {
-        const utils::Instance& instance = scene.instances[instaceId];
-        const utils::Material& material = scene.materials[instance.materialIndex];
-        if (material.IsAlphaOpaque()) {
-            uint64_t mask = uint64_t(instance.meshInstanceIndex) << 32 | uint64_t(instance.materialIndex);
-            size_t currentCount = processedCombinations.size();
-            processedCombinations.insert(mask);
-            bool isDuplicate = processedCombinations.size() == currentCount;
-            if (isDuplicate == false)
-                result.push_back(instaceId);
-        }
-    }
-    return result;
-}
-
 void Sample::InitAlphaTestedGeometry() {
     printf("[OMM] Initializing Alpha Tested Geometry\n");
-    std::vector<uint32_t> alphaInstances = FilterOutAlphaTestedGeometry(m_Scene);
+    std::set<uint64_t> processedCombinations;
+    m_OmmAlphaGeometry.clear();
+    for (const utils::Instance& instance : m_Scene.instances) {
+        if (!m_Scene.materials[instance.materialIndex].IsAlphaOpaque())
+            continue;
+        const uint32_t meshIndex = m_Scene.meshInstances[instance.meshInstanceIndex].meshIndex;
+        if (!processedCombinations.insert(GetMeshMaterialKey(meshIndex, instance.materialIndex)).second)
+            continue;
 
-    if (alphaInstances.empty())
+        AlphaTestedGeometry& geometry = m_OmmAlphaGeometry.emplace_back();
+        geometry.meshIndex = meshIndex;
+        geometry.materialIndex = instance.materialIndex;
+    }
+
+    if (m_OmmAlphaGeometry.empty())
         return;
-
-    m_OmmAlphaGeometry.resize(alphaInstances.size());
 
     size_t positionBufferSize = 0;
     size_t indexBufferSize = 0;
     size_t uvBufferSize = 0;
     uint32_t bufferAlignment = NRI.GetDeviceDesc(*m_Device).memoryAlignment.bufferShaderResourceOffset;
 
-    for (size_t i = 0; i < alphaInstances.size(); ++i) { // Calculate buffer sizes
-        const utils::Instance& instance = m_Scene.instances[alphaInstances[i]];
-        const utils::Mesh& mesh = m_Scene.meshes[instance.meshInstanceIndex];
+    for (const AlphaTestedGeometry& geometry : m_OmmAlphaGeometry) { // Calculate buffer sizes
+        const utils::Mesh& mesh = m_Scene.meshes[geometry.meshIndex];
 
         positionBufferSize += helper::Align(mesh.vertexNum * sizeof(float3), bufferAlignment);
         indexBufferSize += helper::Align(mesh.indexNum * sizeof(utils::Index), bufferAlignment);
@@ -1264,13 +1255,9 @@ void Sample::InitAlphaTestedGeometry() {
     std::vector<uint8_t> indices;
 
     nri::Texture** materialTextures = m_Textures.data() + (size_t)Texture::BaseReadOnlyTexture;
-    for (size_t i = 0; i < alphaInstances.size(); ++i) {
-        const utils::Instance& instance = m_Scene.instances[alphaInstances[i]];
-        const utils::Mesh& mesh = m_Scene.meshes[instance.meshInstanceIndex];
-        const utils::Material& material = m_Scene.materials[instance.materialIndex];
-        AlphaTestedGeometry& geometry = m_OmmAlphaGeometry[i];
-        geometry.meshIndex = instance.meshInstanceIndex;
-        geometry.materialIndex = instance.materialIndex;
+    for (AlphaTestedGeometry& geometry : m_OmmAlphaGeometry) {
+        const utils::Mesh& mesh = m_Scene.meshes[geometry.meshIndex];
+        const utils::Material& material = m_Scene.materials[geometry.materialIndex];
 
         geometry.alphaTexture = materialTextures[material.baseColorTexIndex];
         geometry.utilsTexture = m_Scene.textures[material.baseColorTexIndex];
@@ -1864,7 +1851,7 @@ void Sample::SaveMaskCache(const OmmBatch& batch) {
     for (size_t id = batch.offset; id < batch.offset + batch.count; ++id) {
         AlphaTestedGeometry& geometry = m_OmmAlphaGeometry[id];
         ommhelper::OmmBakeGeometryDesc& bakeResults = geometry.bakeDesc;
-        uint64_t hash = GetInstanceHash(geometry.meshIndex, geometry.materialIndex);
+        uint64_t hash = GetMeshMaterialKey(geometry.meshIndex, geometry.materialIndex);
 
         bool isDataValid = true;
         ommhelper::OmmCaching::OmmData data;
@@ -1891,7 +1878,7 @@ void Sample::InitializeOmmGeometryFromCache(const OmmBatch& batch, std::vector<o
         AlphaTestedGeometry& geometry = m_OmmAlphaGeometry[i];
         ommhelper::OmmBakeGeometryDesc& instance = geometry.bakeDesc;
 
-        uint64_t hash = GetInstanceHash(geometry.meshIndex, geometry.materialIndex);
+        uint64_t hash = GetMeshMaterialKey(geometry.meshIndex, geometry.materialIndex);
         ommhelper::OmmCaching::OmmData data = {};
         if (ommhelper::OmmCaching::ReadMaskFromCache(GetOmmCacheFilename().c_str(), data, stateMask, hash, nullptr)) {
             for (uint32_t j = 0; j < (uint32_t)ommhelper::OmmDataLayout::CpuMaxNum; ++j) {
@@ -2017,7 +2004,7 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
 
         for (size_t instanceId = 0; instanceId < m_OmmAlphaGeometry.size(); ++instanceId) { // skip prepass for instances with cache
             AlphaTestedGeometry& geometry = m_OmmAlphaGeometry[instanceId];
-            uint64_t hash = GetInstanceHash(geometry.meshIndex, geometry.materialIndex);
+            uint64_t hash = GetMeshMaterialKey(geometry.meshIndex, geometry.materialIndex);
             if (ommhelper::OmmCaching::LookForCache(GetOmmCacheFilename().c_str(), stateMask, hash) && m_OmmBakeDesc.enableCache)
                 continue;
             queue.push_back(&geometry.bakeDesc);
@@ -2082,10 +2069,10 @@ void Sample::OmmGeometryUpdate(OmmNriContext& context, bool doBatching) {
                 if (!buildDesc.outputs.blas)
                     continue;
 
-                uint64_t mask = GetInstanceHash(m_OmmAlphaGeometry[id].meshIndex, m_OmmAlphaGeometry[id].materialIndex);
+                uint64_t mask = GetMeshMaterialKey(m_OmmAlphaGeometry[id].meshIndex, m_OmmAlphaGeometry[id].materialIndex);
                 OmmBlas ommBlas = {buildDesc.outputs.blas, buildDesc.outputs.ommArray};
                 std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-                m_InstanceMaskToMaskedBlasData.insert(std::make_pair(mask, ommBlas));
+                m_MaskedBlasByMeshMaterial.insert(std::make_pair(mask, ommBlas));
                 m_MaskedBlasses.push_back({buildDesc.outputs.blas, buildDesc.outputs.ommArray});
             }
         }
@@ -2134,7 +2121,7 @@ void Sample::StartOmmGeometryUpdate(uint64_t fenceValue) {
     if (m_EnableAsync || isCpuBaker) {
         {
             std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-            m_InstanceMaskToMaskedBlasData.clear();
+            m_MaskedBlasByMeshMaterial.clear();
         }
         m_OmmUpdateTask = std::async(std::launch::async, &Sample::RebuildOmmGeometryAsync, this, fenceValue);
     } else
@@ -2164,7 +2151,7 @@ void Sample::ReleaseMaskedGeometry() {
     std::vector<OmmBlas> maskedBlasses;
     {
         std::lock_guard<std::mutex> lock(m_OmmGeometryMutex);
-        m_InstanceMaskToMaskedBlasData.clear();
+        m_MaskedBlasByMeshMaterial.clear();
         maskedBlasses.swap(m_MaskedBlasses);
     }
     for (auto& resource : maskedBlasses)

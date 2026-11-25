@@ -2485,7 +2485,7 @@ void Sample::GatherInstanceData() {
                 topLevelInstance.flags = nri::TopLevelInstanceBits::TRIANGLE_CULL_DISABLE | (material.IsAlphaOpaque() ? nri::TopLevelInstanceBits::NONE : nri::TopLevelInstanceBits::FORCE_OPAQUE);
                 topLevelInstance.accelerationStructureHandle = NRI.GetAccelerationStructureHandle(*m_AccelerationStructures[meshInstance.blasIndex]);
 #pragma region[ OmmSample specific ]
-                nri::AccelerationStructure* blas = m_EnableOmm ? GetMaskedBlas(GetInstanceHash(instance.meshInstanceIndex, instance.materialIndex)) : nullptr;
+                nri::AccelerationStructure* blas = m_EnableOmm ? GetMaskedBlas(GetMeshMaterialKey(meshInstance.meshIndex, instance.materialIndex)) : nullptr;
                 topLevelInstance.accelerationStructureHandle = blas ? NRI.GetAccelerationStructureHandle(*blas) : topLevelInstance.accelerationStructureHandle;
 #pragma endregion
                 m_WorldTlasData.push_back(topLevelInstance);
