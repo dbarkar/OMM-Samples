@@ -12,6 +12,13 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#ifdef _WIN32
+#    include <io.h>
+#    include <share.h>
+#else
+#    include <sys/file.h>
+#    include <unistd.h>
+#endif
 
 namespace ommhelper {
 void OpacityMicroMapsHelper::Initialize(nri::Device* device, bool disableMaskedGeometryBuild) {
@@ -511,8 +518,6 @@ void OpacityMicroMapsHelper::BuildMaskedGeometry(MaskedGeometryBuildDesc** queue
 
 #pragma region[ OMM Caching ]
 
-std::map<uint64_t, uint64_t> OmmCaching::m_IdentifierToDataOffset;
-
 uint64_t OmmCaching::CalculateSateHash(const OmmBakeDesc& bakeDesc) {
     struct CommonState { // leave only those parameters of OmmBakeDesc that contribute to state uniqueness
         uint32_t subdivisionLevel;
@@ -574,193 +579,159 @@ uint64_t OmmCaching::CalculateSateHash(const OmmBakeDesc& bakeDesc) {
     return result;
 }
 
-inline uint64_t CalculateIdentifier(uint64_t a, uint64_t b) {
-    uint64_t identifier = ((a + b) * (a + b + 1)) / 2 + b;
-    return identifier;
-}
+bool OmmCaching::MaskHeader::Fits(uint64_t available) const {
+    if (blobSize > available)
+        return false;
 
-void OmmCaching::PrewarmCache(const char* filename, FILE* file, size_t fileSize) {
-    bool reachedEnd = false;
-    while (reachedEnd != true) {
-        MaskHeader currentHeader = {};
-        size_t currentPos = ftell(file);
-        if (ReadChunkFromFile(filename, file, fileSize, (void*)&currentHeader, sizeof(MaskHeader)) == false)
-            return;
-
-        uint64_t identifier = CalculateIdentifier(currentHeader.stateHash, currentHeader.instanceHash);
-        m_IdentifierToDataOffset.insert(std::make_pair(identifier, uint64_t(currentPos)));
-
-        size_t blobSize = currentHeader.blobSize;
-        currentPos = ftell(file);
-        if (ValidateChunkRead(filename, file, fileSize, currentPos, blobSize) == false) {
-            m_IdentifierToDataOffset.clear();
-            return;
-        }
-
-        fseek(file, long(currentPos + blobSize), SEEK_SET);
-        reachedEnd = ftell(file) == fileSize;
+    uint64_t remaining = blobSize;
+    for (uint64_t size : sizes) {
+        if (size == 0 || size > remaining)
+            return false;
+        remaining -= size;
     }
-    fseek(file, 0, SEEK_SET);
+    return remaining == 0;
 }
 
-bool OmmCaching::LookForCache(const char* filename, uint64_t stateMask, uint64_t hash, size_t* dataOffset) {
-    if (m_IdentifierToDataOffset.empty()) {
-        FILE* file = fopen(filename, "rb");
-        if (file == nullptr)
-            return false; // file not found
+#ifdef _WIN32
+static constexpr auto SeekCacheFile = _fseeki64;
+static constexpr auto TellCacheFile = _ftelli64;
+#else
+static constexpr auto SeekCacheFile = fseeko;
+static constexpr auto TellCacheFile = ftello;
+#endif
 
-        fseek(file, 0, SEEK_END);
-        size_t fileSize = ftell(file);
-        fseek(file, 0, SEEK_SET);
-
-        PrewarmCache(filename, file, fileSize);
+static FILE* OpenCacheFile(const char* filename, bool writable) {
+    const char* mode = writable ? "a+b" : "rb";
+#ifdef _WIN32
+    return _fsopen(filename, mode, _SH_DENYWR);
+#else
+    FILE* file = fopen(filename, mode);
+    if (file && flock(fileno(file), (writable ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0) {
         fclose(file);
+        return nullptr;
     }
-
-    uint64_t identifier = CalculateIdentifier(stateMask, hash);
-    const auto& it = m_IdentifierToDataOffset.find(identifier);
-    if (it == m_IdentifierToDataOffset.end())
-        return false;
-    else {
-        if (dataOffset)
-            *dataOffset = it->second;
-        return true;
-    }
+    return file;
+#endif
 }
 
-bool OmmCaching::ReadMaskFromCache(const char* filename, OmmData& data, uint64_t stateMask, uint64_t hash, uint16_t* ommIndexFormat) {
-    size_t dataOffset = 0;
-    if (LookForCache(filename, stateMask, hash, &dataOffset) == false)
-        return false;
-
-    FILE* file = fopen(filename, "rb");
-    if (file == nullptr) {
-        printf("[FAIL] Unable to open file for reading: {%s}\n", filename);
-        m_IdentifierToDataOffset.clear();
-        return false;
-    }
-
-    fseek(file, 0, SEEK_END);
-    size_t fileSize = ftell(file);
-    fseek(file, long(dataOffset), SEEK_SET);
-
-    MaskHeader header = {};
-    if (ReadChunkFromFile(filename, file, fileSize, &header, sizeof(header)) == false)
-        return false;
-
-    std::vector<uint8_t> blob(header.blobSize);
-    if (ReadChunkFromFile(filename, file, fileSize, blob.data(), header.blobSize) == false)
-        return false;
-
-    for (uint32_t i = 0; i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i) {
-        void* out = data.data[i];
-        data.sizes[i] = header.sizes[i];
-
-        if (!out)
-            continue;
-
-        memcpy(out, blob.data(), header.sizes[i]);
-        blob.erase(blob.begin(), blob.begin() + header.sizes[i]);
-    }
-
-    if (ommIndexFormat)
-        *ommIndexFormat = header.ommIndexFormat;
-
-    fclose(file);
-    return true;
+static bool TrimCacheFile(FILE* file, uint64_t size) {
+#ifdef _WIN32
+    return _chsize_s(_fileno(file), size) == 0;
+#else
+    return ftruncate(fileno(file), size) == 0;
+#endif
 }
 
-void OmmCaching::SaveMasksToDisc(const char* filename, const OmmData& data, uint64_t stateMask, uint64_t hash, uint32_t ommIndexFormat) {
-    if (LookForCache(filename, stateMask, hash, nullptr))
-        return; // mask for this state is already cached
+void OmmCaching::Open(const std::string& filename, const OmmBakeDesc& bakeDesc) {
+    m_Filename = filename;
+    m_StateHash = CalculateSateHash(bakeDesc);
+    m_ValidSize = 0;
+    m_MaskOffsets.clear();
 
-    FILE* outputFile = fopen(filename, "ab");
-    if (outputFile == nullptr) {
-        printf("[FAIL] Unable to open file for writing: {%s}\n", filename);
-        m_IdentifierToDataOffset.clear();
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(filename).parent_path(), error);
+    m_File.reset();
+    m_File.reset(OpenCacheFile(filename.c_str(), true));
+    m_Writable = (bool)m_File;
+    if (!m_File)
+        m_File.reset(OpenCacheFile(filename.c_str(), false));
+    FILE* file = m_File.get();
+    if (!file)
+        return;
+    if (SeekCacheFile(file, 0, SEEK_END) != 0) {
+        m_Writable = false;
+        return;
+    }
+    const auto end = TellCacheFile(file);
+    if (end < 0) {
+        m_Writable = false;
         return;
     }
 
-    fseek(outputFile, 0, SEEK_END);
-    size_t fileSize = ftell(outputFile);
-    fseek(outputFile, 0, SEEK_SET);
-
-    size_t blobSize = 0;
-    for (uint32_t i = 0; i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i)
-        blobSize += data.sizes[i];
-
-    if (blobSize != 0) {
+    const uint64_t fileSize = (uint64_t)end;
+    while (fileSize - m_ValidSize >= sizeof(MaskHeader)) {
         MaskHeader header = {};
-        std::vector<uint8_t> dataBlob;
-        dataBlob.reserve(blobSize);
-
-        for (uint32_t i = 0; i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i) {
-            uint64_t size = data.sizes[i];
-            header.sizes[i] = size;
-            size_t blobOffset = dataBlob.size();
-            dataBlob.resize(dataBlob.size() + size);
-            memcpy(dataBlob.data() + blobOffset, data.data[i], size);
+        if (SeekCacheFile(file, m_ValidSize, SEEK_SET) != 0 || fread(&header, sizeof(header), 1, file) != 1) {
+            m_Writable = false;
+            return;
         }
+        if (!header.Fits(fileSize - m_ValidSize - sizeof(header)))
+            break;
 
-        header.instanceHash = hash;
-        header.stateHash = stateMask;
-        header.ommIndexFormat = (uint16_t)ommIndexFormat;
-        header.blobSize = blobSize;
+        if (header.stateHash == m_StateHash)
+            m_MaskOffsets.emplace(header.instanceHash, m_ValidSize);
+        m_ValidSize += sizeof(header) + header.blobSize;
+    }
 
-        if (!WriteChunkToFile(filename, outputFile, (void*)&header, sizeof(header)))
+    if (m_ValidSize != fileSize && m_Writable && !TrimCacheFile(file, m_ValidSize)) {
+        m_Writable = false;
+        printf("[OMM] Unable to trim incomplete cache record in '%s'.\n", filename.c_str());
+    }
+}
+
+bool OmmCaching::HasMask(uint64_t hash) const {
+    return m_MaskOffsets.count(hash) != 0;
+}
+
+bool OmmCaching::ReadMask(uint64_t hash, OmmBakeGeometryDesc& geometry, nri::Format& indexFormat) const {
+    const auto it = m_MaskOffsets.find(hash);
+    if (it == m_MaskOffsets.end())
+        return false;
+
+    FILE* file = m_File.get();
+    const uint64_t offset = it->second;
+    MaskHeader header = {};
+    if (SeekCacheFile(file, offset, SEEK_SET) != 0 || fread(&header, sizeof(header), 1, file) != 1)
+        return false;
+    if (header.stateHash != m_StateHash || header.instanceHash != hash || !header.Fits(m_ValidSize - offset - sizeof(header)))
+        return false;
+
+    for (uint32_t i = 0; i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i) {
+        geometry.outData[i].resize(header.sizes[i]);
+        if (fread(geometry.outData[i].data(), 1, header.sizes[i], file) != header.sizes[i]) {
+            for (auto& data : geometry.outData)
+                data.clear();
+            return false;
+        }
+    }
+
+    indexFormat = (nri::Format)header.ommIndexFormat;
+    return true;
+}
+
+void OmmCaching::SaveMask(uint64_t hash, const OmmBakeGeometryDesc& geometry) {
+    if (!m_Writable || HasMask(hash))
+        return;
+
+    MaskHeader header = {};
+    header.stateHash = m_StateHash;
+    header.instanceHash = hash;
+    header.ommIndexFormat = (uint16_t)geometry.outOmmIndexFormat;
+    for (uint32_t i = 0; i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i) {
+        if (geometry.outData[i].empty())
             return;
-        if (!WriteChunkToFile(filename, outputFile, (void*)dataBlob.data(), header.blobSize))
-            return;
-
-        uint64_t identifier = CalculateIdentifier(stateMask, hash);
-        m_IdentifierToDataOffset.insert(std::make_pair(identifier, fileSize));
+        header.sizes[i] = geometry.outData[i].size();
+        header.blobSize += header.sizes[i];
     }
 
-    fclose(outputFile);
-}
-
-void OmmCaching::CreateFolder(const char* path) {
-    bool success = true;
-    if (std::filesystem::exists(path) == false)
-        success = std::filesystem::create_directory(path);
-    if (!success)
-        printf("[FAIL] Unable to create folder: {%s}\n", path);
-};
-
-inline bool OmmCaching::WriteChunkToFile(const char* fileName, FILE* file, void* data, size_t size) {
-    if (fwrite(data, 1, size, file) != size) {
-        printf("[FAIL] Unable to write to file: {%s}\n", fileName);
-        fclose(file);
-        std::filesystem::remove(fileName);
-        m_IdentifierToDataOffset.clear();
-        return false;
+    FILE* file = m_File.get();
+    if (SeekCacheFile(file, 0, SEEK_END) != 0 || TellCacheFile(file) != (int64_t)m_ValidSize) {
+        m_Writable = false;
+        printf("[OMM] Unable to append to cache '%s'.\n", m_Filename.c_str());
+        return;
     }
-    return true;
-}
 
-inline bool OmmCaching::ValidateChunkRead(const char* fileName, FILE* file, size_t fileSize, size_t currentPos, size_t dataSize) {
-    if (currentPos + dataSize > fileSize) {
-        printf("[FAIL] File end unexpected. Invalidating: {%s}\n", fileName);
-        fclose(file);
-        std::filesystem::remove(fileName);
-        m_IdentifierToDataOffset.clear();
-        return false;
+    bool written = fwrite(&header, sizeof(header), 1, file) == 1;
+    for (uint32_t i = 0; written && i < (uint32_t)OmmDataLayout::CpuMaxNum; ++i)
+        written = fwrite(geometry.outData[i].data(), 1, header.sizes[i], file) == header.sizes[i];
+    if (!written || fflush(file) != 0) {
+        m_Writable = false;
+        printf("[OMM] Unable to finish writing cache record in '%s'.\n", m_Filename.c_str());
+        return;
     }
-    return true;
-}
 
-inline bool OmmCaching::ReadChunkFromFile(const char* fileName, FILE* file, size_t fileSize, void* data, size_t dataSize) {
-    size_t currentPos = ftell(file);
-    if (ValidateChunkRead(fileName, file, fileSize, currentPos, dataSize) == false)
-        return false;
-
-    if (fread(data, 1, dataSize, file) != dataSize) {
-        printf("[FAIL] Unable to read file: {%s}\n", fileName);
-        fclose(file);
-        m_IdentifierToDataOffset.clear();
-        return false;
-    }
-    return true;
+    m_MaskOffsets.emplace(hash, m_ValidSize);
+    m_ValidSize += sizeof(header) + header.blobSize;
 }
 
 #pragma endregion

@@ -15,7 +15,10 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <cstdio>
 #include <map>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "NRI.h"
@@ -207,31 +210,29 @@ struct MaskedGeometryBuildDesc {
 };
 
 struct OmmCaching {
+    void Open(const std::string& filename, const OmmBakeDesc& bakeDesc);
+    bool HasMask(uint64_t hash) const;
+    bool ReadMask(uint64_t hash, OmmBakeGeometryDesc& geometry, nri::Format& indexFormat) const;
+    void SaveMask(uint64_t hash, const OmmBakeGeometryDesc& geometry);
+
+private:
     struct MaskHeader {
         uint64_t instanceHash;
         uint64_t stateHash;
         uint64_t sizes[(uint32_t)OmmDataLayout::CpuMaxNum];
         uint64_t blobSize;
         uint16_t ommIndexFormat;
+
+        bool Fits(uint64_t available) const;
     };
 
-    struct OmmData {
-        void* data[(uint32_t)OmmDataLayout::CpuMaxNum];
-        uint64_t sizes[(uint32_t)OmmDataLayout::CpuMaxNum];
-    };
-
-    static uint64_t CalculateSateHash(const OmmBakeDesc& buildDesc);
-    static bool LookForCache(const char* filename, uint64_t stateMask, uint64_t hash, size_t* dataOffset = nullptr);
-    static bool ReadMaskFromCache(const char* filename, OmmData& data, uint64_t stateMask, uint64_t hash, uint16_t* ommIndexFormat);
-    static void SaveMasksToDisc(const char* filename, const OmmData& data, uint64_t stateMask, uint64_t hash, uint32_t ommIndexFormat);
-    static void CreateFolder(const char* path);
-
-private:
-    static void PrewarmCache(const char* filename, FILE* file, size_t fileSize);
-    static bool WriteChunkToFile(const char* fileName, FILE* file, void* data, size_t size);
-    static bool ValidateChunkRead(const char* fileName, FILE* file, size_t fileSize, size_t currentPos, size_t dataSize);
-    static bool ReadChunkFromFile(const char* fileName, FILE* file, size_t fileSize, void* data, size_t dataSize);
-    static std::map<uint64_t, uint64_t> m_IdentifierToDataOffset;
+    static uint64_t CalculateSateHash(const OmmBakeDesc& bakeDesc);
+    std::unique_ptr<FILE, decltype(&fclose)> m_File{nullptr, &fclose};
+    std::string m_Filename;
+    bool m_Writable = false;
+    uint64_t m_StateHash = 0;
+    uint64_t m_ValidSize = 0;
+    std::map<uint64_t, uint64_t> m_MaskOffsets;
 };
 
 class OpacityMicroMapsHelper {

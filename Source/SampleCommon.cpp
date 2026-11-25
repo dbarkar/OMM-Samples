@@ -1,6 +1,7 @@
 // © 2022 NVIDIA Corporation
 
 #include "OmmSample.hpp"
+#include <filesystem>
 
 float CalculateWorldToUvUnits(const utils::Scene& scene, uint32_t vertexOffset, uint32_t indexOffset) {
     const utils::UnpackedVertex& v0 = scene.unpackedVertices[vertexOffset + scene.indices[indexOffset]];
@@ -1105,6 +1106,24 @@ void Sample::PrepareFrame(uint32_t frameIndex) {
     nri::nriEndAnnotation();
 }
 
+static std::string GetOmmCacheFilename(const std::filesystem::path& sceneFile) {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    const fs::path sceneRoot = utils::GetFullPath("", utils::DataFolder::SCENES);
+    fs::path directory = fs::relative(sceneFile.parent_path(), sceneRoot, error);
+    if (directory.empty())
+        directory = fs::canonical(sceneFile.parent_path(), error);
+    if (error)
+        return {};
+
+    const auto identity = (directory / sceneFile.filename()).lexically_normal().generic_u8string();
+    uint64_t hash = 14695981039346656037ull;
+    for (uint8_t byte : identity)
+        hash = (hash ^ byte) * 1099511628211ull;
+
+    return "_OmmCache/scenes/" + std::to_string(hash) + ".bin";
+}
+
 void Sample::LoadScene() {
     // Proxy geometry, which will be instancinated
     std::string sceneFile = utils::GetFullPath("Cubes/Cubes.gltf", utils::DataFolder::SCENES);
@@ -1114,6 +1133,7 @@ void Sample::LoadScene() {
 
     // The scene
     if (m_SceneFile.find("Claire") != std::string::npos) {
+        m_OmmCacheFilename = "_OmmCache/scenes/Claire.bin";
         NRI_ABORT_ON_FALSE(utils::LoadScene("_Data/Scenes/Claire/Claire/Claire_PonyTail.gltf", m_Scene, !ALLOW_BLAS_MERGING));
         NRI_ABORT_ON_FALSE(utils::LoadScene("_Data/Scenes/Claire/Claire/Claire_HairMain_less_strands.gltf", m_Scene, !ALLOW_BLAS_MERGING));
         NRI_ABORT_ON_FALSE(utils::LoadScene("_Data/Scenes/Claire/Claire/Claire_BabyHairFront.gltf", m_Scene, !ALLOW_BLAS_MERGING));
@@ -1127,6 +1147,7 @@ void Sample::LoadScene() {
     } else {
         sceneFile = utils::GetFullPath(m_SceneFile, utils::DataFolder::SCENES);
         NRI_ABORT_ON_FALSE(utils::LoadScene(sceneFile, m_Scene, !ALLOW_BLAS_MERGING));
+        m_OmmCacheFilename = GetOmmCacheFilename(sceneFile);
     }
 
     // Some scene dependent settings
