@@ -1222,7 +1222,13 @@ nri::Format Sample::CreateSwapChain() {
     swapChainDesc.textureNum = GetOptimalSwapChainTextureNum();
     swapChainDesc.queuedFrameNum = GetQueuedFrameNum();
 
-    NRI_ABORT_ON_FAILURE(NRI.CreateSwapChain(*m_Device, swapChainDesc, m_SwapChain));
+    nri::Result result = NRI.CreateSwapChain(*m_Device, swapChainDesc, m_SwapChain);
+    if (result == nri::Result::UNSUPPORTED && swapChainDesc.format == nri::SwapChainFormat::BT709_G10_16BIT) {
+        printf("HDR swapchain unsupported. Retrying with 8-bit SDR.\n");
+        swapChainDesc.format = nri::SwapChainFormat::BT709_G22_8BIT;
+        result = NRI.CreateSwapChain(*m_Device, swapChainDesc, m_SwapChain);
+    }
+    NRI_ABORT_ON_FAILURE(result);
     m_IsSrgb = swapChainDesc.format != nri::SwapChainFormat::BT709_G10_16BIT;
 
     uint32_t swapChainTextureNum = 0;
@@ -2585,7 +2591,7 @@ void Sample::UpdateConstantBuffer(uint32_t frameIndex, uint32_t maxAccumulatedFr
     nri::DisplayDesc displayDesc = {};
     NRI.GetDisplayDesc(*m_SwapChain, displayDesc);
 
-    m_SdrScale = displayDesc.sdrLuminance / 80.0f;
+    m_SdrScale = m_IsSrgb ? 1.0f : displayDesc.sdrLuminance / 80.0f;
 
     GlobalConstants constants;
     {
@@ -2632,7 +2638,7 @@ void Sample::UpdateConstantBuffer(uint32_t frameIndex, uint32_t maxAccumulatedFr
         constants.gFocalDistance = m_DofFocalDistance;
         constants.gFocalLength = (0.5f * (35.0f * 0.001f)) / tan(radians(m_Settings.camFov * 0.5f)); // for 35 mm sensor size (aka old-school 35 mm film)
         constants.gTAA = (m_Settings.denoiser != DENOISER_REFERENCE && m_Settings.TAA) ? 1.0f / (1.0f + taaMaxAccumulatedFrameNum) : 1.0f;
-        constants.gHdrScale = displayDesc.isHDR ? displayDesc.maxLuminance / 80.0f : 1.0f;
+        constants.gHdrScale = !m_IsSrgb && displayDesc.isHDR ? displayDesc.maxLuminance / 80.0f : 1.0f;
         constants.gExposure = m_Settings.exposure;
         constants.gMipBias = mipBias;
         constants.gOrthoMode = orthoMode;
@@ -2701,7 +2707,22 @@ void Sample::RestoreBindings(nri::CommandBuffer& commandBuffer) {
     NRI.CmdSetRootDescriptor(commandBuffer, root4);
 }
 
+static void CheckSwapChainResult(nri::Result result, const char* operation) {
+    if (result == nri::Result::OUT_OF_DATE)
+        fprintf(stderr, "%s: the swapchain is out of date. Restart the sample for the new surface.\n", operation);
+    else if (result != nri::Result::SUCCESS)
+        fprintf(stderr, "%s failed (NRI result %d).\n", operation, (int)result);
+
+    NRI_ABORT_ON_FAILURE(result);
+}
+
 void Sample::RenderFrame(uint32_t frameIndex) {
+    uint32_t recycledSemaphoreIndex = frameIndex % (uint32_t)m_SwapChainTextures.size();
+    nri::Fence* swapChainAcquireSemaphore = m_SwapChainTextures[recycledSemaphoreIndex].acquireSemaphore;
+    uint32_t currentSwapChainTextureIndex = 0;
+    CheckSwapChainResult(NRI.AcquireNextTexture(*m_SwapChain, *swapChainAcquireSemaphore, currentSwapChainTextureIndex), "AcquireNextTexture");
+    const SwapChainTexture& swapChainTexture = m_SwapChainTextures[currentSwapChainTextureIndex];
+
 #pragma region[ OmmSample specific ]
     m_Profiler.BeginFrame();
 #pragma endregion
@@ -3301,23 +3322,13 @@ void Sample::RenderFrame(uint32_t frameIndex) {
         NRI.CmdDispatch(commandBuffer, {outputGridW, outputGridH, 1});
     }
 
-    // Acquire a swap chain texture
-    uint32_t recycledSemaphoreIndex = frameIndex % (uint32_t)m_SwapChainTextures.size();
-    nri::Fence* swapChainAcquireSemaphore = m_SwapChainTextures[recycledSemaphoreIndex].acquireSemaphore;
-
-    uint32_t currentSwapChainTextureIndex = 0;
-    nri::Result result = NRI.AcquireNextTexture(*m_SwapChain, *swapChainAcquireSemaphore, currentSwapChainTextureIndex);
-    if (result == nri::Result::OUT_OF_DATE)
-        printf("Oops, unhandled out of date!\n");
-
-    const SwapChainTexture& swapChainTexture = m_SwapChainTextures[currentSwapChainTextureIndex];
-
     { // Copy to back-buffer
         helper::Annotation annotation(NRI, commandBuffer, "Copy to back buffer");
 
         const nri::TextureBarrierDesc transitions[] = {
             TextureBarrierFromState(GetState(Texture::Final), {nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE}),
-            TextureBarrierFromUnknown(swapChainTexture.texture, {nri::AccessBits::COPY_DESTINATION, nri::Layout::COPY_DESTINATION}),
+            {swapChainTexture.texture, {nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::COPY},
+                {nri::AccessBits::COPY_DESTINATION, nri::Layout::COPY_DESTINATION, nri::StageBits::COPY}},
         };
         nri::BarrierDesc transitionBarriers = {nullptr, 0, nullptr, 0, transitions, (uint16_t)helper::GetCountOf(transitions)};
         NRI.CmdBarrier(commandBuffer, transitionBarriers);
@@ -3367,7 +3378,7 @@ void Sample::RenderFrame(uint32_t frameIndex) {
 
         nri::FenceSubmitDesc textureAcquiredFence = {};
         textureAcquiredFence.fence = swapChainAcquireSemaphore;
-        textureAcquiredFence.stages = nri::StageBits::COLOR_ATTACHMENT;
+        textureAcquiredFence.stages = nri::StageBits::COPY;
 
         nri::FenceSubmitDesc renderingFinishedFence = {};
         renderingFinishedFence.fence = swapChainTexture.releaseSemaphore;
@@ -3382,7 +3393,7 @@ void Sample::RenderFrame(uint32_t frameIndex) {
         queueSubmitDesc.signalFences = signalFences;
         queueSubmitDesc.signalFenceNum = helper::GetCountOf(signalFences);
 
-        NRI.QueueSubmit(*m_GraphicsQueue, queueSubmitDesc);
+        NRI_ABORT_ON_FAILURE(NRI.QueueSubmit(*m_GraphicsQueue, queueSubmitDesc));
     }
 
     NRI.EndStreamerFrame(*m_Streamer);
@@ -3392,7 +3403,7 @@ void Sample::RenderFrame(uint32_t frameIndex) {
     // Present
     nri::nriBeginAnnotation("Present", nri::BGRA_UNUSED);
     {
-        NRI.QueuePresent(*m_SwapChain, *swapChainTexture.releaseSemaphore, uint64_t(frameIndex) + 1);
+        CheckSwapChainResult(NRI.QueuePresent(*m_SwapChain, *swapChainTexture.releaseSemaphore, uint64_t(frameIndex) + 1), "QueuePresent");
     }
     nri::nriEndAnnotation();
 
