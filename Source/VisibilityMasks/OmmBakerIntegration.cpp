@@ -1050,8 +1050,8 @@ void OmmBakerGpuIntegration::DispatchDrawIndexedIndirect(nri::CommandBuffer& com
         nri::Viewport viewport = {};
         viewport.x = desc.viewport.minWidth;
         viewport.y = desc.viewport.minHeight;
-        viewport.width = desc.viewport.minHeight;
-        viewport.height = desc.viewport.maxWidth;
+        viewport.width = desc.viewport.maxWidth - desc.viewport.minWidth;
+        viewport.height = desc.viewport.maxHeight - desc.viewport.minHeight;
         viewport.depthMin = 0.0f;
         viewport.depthMax = 1.0f;
         NRI.CmdSetViewports(commandBuffer, &viewport, 1);
@@ -1059,8 +1059,8 @@ void OmmBakerGpuIntegration::DispatchDrawIndexedIndirect(nri::CommandBuffer& com
         nri::Rect scissorRect = {};
         scissorRect.x = int16_t(desc.viewport.minWidth);
         scissorRect.y = int16_t(desc.viewport.minHeight);
-        scissorRect.width = nri::Dim_t(desc.viewport.maxWidth);
-        scissorRect.height = nri::Dim_t(desc.viewport.maxHeight);
+        scissorRect.width = nri::Dim_t(viewport.width);
+        scissorRect.height = nri::Dim_t(viewport.height);
         NRI.CmdSetScissors(commandBuffer, &scissorRect, 1);
 
         NRI.CmdDrawIndexedIndirect(commandBuffer, *argBuffer.buffer, desc.indirectArgByteOffset, 1, 20, nullptr, 0); // TODO: replace last constant with a GAPI related var

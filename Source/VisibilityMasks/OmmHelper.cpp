@@ -562,9 +562,15 @@ uint64_t OmmCaching::CalculateSateHash(const OmmBakeDesc& bakeDesc) {
     const uint8_t* p = (bakeDesc.type == OmmBakerType::GPU) ? (uint8_t*)&gpuState : (uint8_t*)&cpuState;
     size_t len = (bakeDesc.type == OmmBakerType::GPU) ? sizeof(GpuState) : sizeof(CpuState);
 
+    constexpr uint64_t fnvPrime = 1099511628211ull;
     uint64_t result = 14695981039346656037ull;
     while (len--)
-        result = (result ^ (*p++)) * 1099511628211ull;
+        result = (result ^ (*p++)) * fnvPrime;
+    if (bakeDesc.type == OmmBakerType::GPU && bakeDesc.mipBias != 0) {
+        // Older GPU bakes used the base mip dimensions with the selected mip view.
+        constexpr uint8_t gpuMipBakeVersion = 1;
+        result = (result ^ gpuMipBakeVersion) * fnvPrime;
+    }
     return result;
 }
 

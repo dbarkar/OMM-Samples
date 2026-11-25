@@ -1418,27 +1418,25 @@ void Sample::FillOmmBakerInputs() {
         const utils::Material& material = m_Scene.materials[geometry.materialIndex];
         nri::Texture* texture = geometry.alphaTexture;
 
-        ommhelper::InputTexture bakerTexture = ommDesc.texture;
         utils::Texture* utilsTexture = m_Scene.textures[material.baseColorTexIndex];
         if (isGpuBaker) {
             ommDesc.indices.nriBufferOrPtr.buffer = geometry.indices;
             ommDesc.uvs.nriBufferOrPtr.buffer = geometry.uvs;
             uint32_t minMip = utilsTexture->GetMipNum() - 1;
             uint32_t textureMipOffset = m_OmmBakeDesc.mipBias > minMip ? minMip : m_OmmBakeDesc.mipBias;
+            const auto* selectedMip = static_cast<const detexTexture*>(utilsTexture->mips[textureMipOffset]);
             ommDesc.texture.mipOffset = textureMipOffset;
             ommDesc.texture.mipNum = 1; // gpu baker currently doesn't support multiple mips
             ommhelper::MipDesc& mipDesc = ommDesc.texture.mips[0];
             mipDesc.nriTextureOrPtr.texture = texture;
-            mipDesc.width = reinterpret_cast<detexTexture*>(utilsTexture->mips[bakerTexture.mipOffset])->width;
-            ;
-            mipDesc.height = reinterpret_cast<detexTexture*>(utilsTexture->mips[bakerTexture.mipOffset])->height;
-            ;
+            mipDesc.width = selectedMip->width;
+            mipDesc.height = selectedMip->height;
         } else {
             ommDesc.indices.nriBufferOrPtr.ptr = (void*)geometry.indexData.data();
             ommDesc.uvs.nriBufferOrPtr.ptr = (void*)geometry.uvData.data();
 
-            for (uint32_t mip = 0; mip < bakerTexture.mipNum; ++mip) {
-                uint32_t mipId = bakerTexture.mipOffset + mip;
+            for (uint32_t mip = 0; mip < ommDesc.texture.mipNum; ++mip) {
+                uint32_t mipId = ommDesc.texture.mipOffset + mip;
                 uint64_t materialMask = uint64_t(geometry.materialIndex) << 32 | uint64_t(mipId);
                 size_t texDataOffset = materialMaskToTextureDataOffset.find(materialMask)->second;
 
