@@ -893,7 +893,7 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
     // Adapters
     nri::AdapterDesc adapterDesc[4] = {};
     uint32_t adapterDescsNum = helper::GetCountOf(adapterDesc);
-    NRI_ABORT_ON_FAILURE(nri::nriEnumerateAdapters(adapterDesc, adapterDescsNum));
+    NRI_ABORT_ON_FAILURE(nri::nriEnumerateAdapters(adapterDesc, adapterDescsNum, graphicsAPI));
 
     // Device
     nri::DeviceCreationDesc deviceCreationDesc = {};
