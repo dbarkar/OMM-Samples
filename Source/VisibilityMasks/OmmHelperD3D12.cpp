@@ -59,11 +59,10 @@ inline D3D12_RESOURCE_DESC InitBufferResourceDesc(size_t size, D3D12_RESOURCE_FL
     return result;
 }
 
-inline D3D12_RESOURCE_BARRIER InitUavBarrier(ID3D12Resource* resource) {
-    D3D12_RESOURCE_BARRIER result = {};
-    result.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    result.UAV.pResource = resource;
-    return result;
+inline void InsertBuildBarrier(ID3D12GraphicsCommandList4* commandList) {
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    commandList->ResourceBarrier(1, &barrier);
 }
 
 inline D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_DESC FillOmmArrayDesc(MaskedGeometryBuildDesc::Inputs& inputs, ID3D12Resource* ommArrayData, ID3D12Resource* ommDescArray) {
@@ -254,13 +253,9 @@ void OpacityMicroMapsHelper::BuildOmmArrayD3D12(MaskedGeometryBuildDesc& desc, n
         assert(vmArrayDesc.Inputs.pOpacityMicromapArrayDesc->InputBuffer % D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT == 0);
         ID3D12GraphicsCommandList4* commandList = GetD3D12GraphicsCommandList4(commandBuffer);
         commandList->BuildRaytracingAccelerationStructure(&vmArrayDesc, 0, &info);
+        InsertBuildBarrier(commandList);
         commandList->Release();
     }
-
-    D3D12_RESOURCE_BARRIER barriers[] = {InitUavBarrier(m_D3D12ScratchBuffer)};
-    ID3D12GraphicsCommandList4* commandList = GetD3D12GraphicsCommandList4(commandBuffer);
-    commandList->ResourceBarrier(_countof(barriers), barriers);
-    commandList->Release();
 
     nri::BufferD3D12Desc wrappedBufferDesc = {ommArrayBuffer, 0};
     NRI.CreateBufferD3D12(*m_Device, wrappedBufferDesc, desc.outputs.ommArray);
@@ -297,14 +292,9 @@ void OpacityMicroMapsHelper::BuildBlasD3D12(MaskedGeometryBuildDesc& desc, nri::
         ID3D12GraphicsCommandList4* commandList = GetD3D12GraphicsCommandList4(commandBuffer);
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info = {};
         commandList->BuildRaytracingAccelerationStructure(&vmArrayDesc, 0, &info);
+        InsertBuildBarrier(commandList);
         commandList->Release();
     }
-    D3D12_RESOURCE_BARRIER barriers[] = {InitUavBarrier(m_D3D12ScratchBuffer)};
-
-    ID3D12GraphicsCommandList4* commandList = GetD3D12GraphicsCommandList4(commandBuffer);
-    commandList->ResourceBarrier(_countof(barriers), barriers);
-    commandList->Release();
-
     nri::AccelerationStructureD3D12Desc asDesc = {};
     asDesc.d3d12Resource = blas;
     asDesc.buildScratchSize = desc.prebuildInfo.maxScratchDataSize;

@@ -367,18 +367,11 @@ void OpacityMicroMapsHelper::GetPreBuildInfoVK(MaskedGeometryBuildDesc** queue, 
     VK.FreeMemory(GetVkDevice(), tmpMemory, nullptr);
 }
 
-inline void InsertUavBarrier(VkCommandBuffer commandBuffer, VkBuffer buffer, uint64_t size, uint64_t offset) {
-    VkBufferMemoryBarrier barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.srcQueueFamilyIndex = (~0U);
-    barrier.dstQueueFamilyIndex = (~0U);
-    barrier.buffer = buffer;
-    barrier.offset = offset;
-    barrier.size = size;
-
-    uint32_t stageBit = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    VK.CmdPipelineBarrier(commandBuffer, stageBit, stageBit, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+inline void InsertBuildBarrier(VkCommandBuffer commandBuffer) {
+    VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    VK.CmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
 void OpacityMicroMapsHelper::BindOmmToMemoryVK(VkMicromapEXT& ommArray, size_t size) {
@@ -429,7 +422,7 @@ void OpacityMicroMapsHelper::BuildOmmArrayVK(MaskedGeometryBuildDesc& desc, nri:
 
     VkCommandBuffer vkCommandBuffer = (VkCommandBuffer)NRI.GetCommandBufferNativeObject(commandBuffer);
     VK.CmdBuildMicromapsEXT(vkCommandBuffer, 1, &buildDesc);
-    InsertUavBarrier(vkCommandBuffer, m_VkScrathBuffer, m_SctrachSize, 0);
+    InsertBuildBarrier(vkCommandBuffer);
 
     desc.outputs.ommArray = reinterpret_cast<nri::Buffer*>(ommArray);
 }
@@ -488,7 +481,7 @@ void OpacityMicroMapsHelper::BuildBlasVK(MaskedGeometryBuildDesc& desc, nri::Com
 
     VkCommandBuffer vkCommandBuffer = (VkCommandBuffer)NRI.GetCommandBufferNativeObject(commandBuffer);
     VK.CmdBuildAccelerationStructuresKHR(vkCommandBuffer, 1, &blasDesc, rangeArrays); // Known issue: Vulkan Debug Layer crashes here
-    InsertUavBarrier(vkCommandBuffer, m_VkScrathBuffer, m_SctrachSize, 0);
+    InsertBuildBarrier(vkCommandBuffer);
 
     nri::AccelerationStructureVKDesc wrapperDesc = {};
     wrapperDesc.buildScratchSize = desc.prebuildInfo.maxScratchDataSize;
