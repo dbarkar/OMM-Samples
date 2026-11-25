@@ -9,6 +9,8 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
 */
 
 #include "OmmHelper.h"
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 
 namespace ommhelper {
@@ -219,7 +221,15 @@ void OpacityMicroMapsHelper::DestroyMaskedGeometry(nri::AccelerationStructure* b
 
 void OpacityMicroMapsHelper::ReleaseGeometryMemory() {
     ReleaseMemoryD3D12();
-    ReleaseMemoryVK();
+    for (nri::Buffer* buffer : m_VkBuffers)
+        NRI.DestroyBuffer(buffer);
+    m_VkBuffers.clear();
+    m_CurrentHeapOffset = 0;
+
+    if (m_ScratchBuffer)
+        NRI.DestroyBuffer(m_ScratchBuffer);
+    m_ScratchBuffer = nullptr;
+    m_ScratchAddress = 0;
 }
 
 #pragma endregion
@@ -465,9 +475,31 @@ void OpacityMicroMapsHelper::GetBlasPrebuildInfo(MaskedGeometryBuildDesc** queue
         GetPreBuildInfoVK(queue, count);
 }
 
+nri::Buffer* OpacityMicroMapsHelper::CreateBuildBuffer(uint64_t size, nri::BufferUsageBits usage) {
+    nri::Buffer* buffer = nullptr;
+    const nri::BufferDesc desc = {size, 0, usage};
+    if (NRI.CreateCommittedBuffer(*m_Device, nri::MemoryLocation::DEVICE, 0.0f, desc, buffer) != nri::Result::SUCCESS) {
+        fprintf(stderr, "[FAIL] Cannot allocate OMM build buffer (%llu bytes)\n", (unsigned long long)size);
+        std::abort();
+    }
+    return buffer;
+}
+
 void OpacityMicroMapsHelper::BuildMaskedGeometry(MaskedGeometryBuildDesc** queue, const size_t count, nri::CommandBuffer* commandBuffer) {
-    if (m_DisableGeometryBuild)
+    if (m_DisableGeometryBuild || count == 0)
         return;
+
+    GetBlasPrebuildInfo(queue, count);
+    uint64_t scratchSize = 0;
+    for (size_t i = 0; i < count; ++i)
+        scratchSize = std::max(scratchSize, queue[i]->prebuildInfo.maxScratchDataSize);
+
+    if (scratchSize > (m_ScratchBuffer ? NRI.GetBufferDesc(*m_ScratchBuffer).size : 0)) {
+        if (m_ScratchBuffer)
+            NRI.DestroyBuffer(m_ScratchBuffer);
+        m_ScratchBuffer = CreateBuildBuffer(scratchSize, nri::BufferUsageBits::SCRATCH);
+        m_ScratchAddress = NRI.GetBufferDeviceAddress(*m_ScratchBuffer);
+    }
 
     if (NRI.GetDeviceDesc(*m_Device).graphicsAPI == nri::GraphicsAPI::D3D12)
         BuildMaskedGeometryD3D12(queue, count, commandBuffer);

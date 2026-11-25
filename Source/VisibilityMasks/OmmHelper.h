@@ -266,8 +266,7 @@ private:
 
     // VK:
     void InitializeVK();
-    void AllocateMemoryVK(uint64_t size);
-    void ReleaseMemoryVK();
+    VkBuffer GetGeometryBufferVK(uint64_t size);
     void GetPreBuildInfoVK(MaskedGeometryBuildDesc** queue, const size_t count);
     void BindOmmToMemoryVK(VkMicromapEXT& ommArray, size_t size);
     void BindBlasToMemoryVK(VkAccelerationStructureKHR& blas, size_t size);
@@ -279,22 +278,21 @@ private:
     VkDevice GetVkDevice();
 
 private:
+    nri::Buffer* CreateBuildBuffer(uint64_t size, nri::BufferUsageBits usage);
+
     // internal memory for masked geometry
     // TODO: when micromaps are supported in NRI, move memory managment to the sample main part
     const uint64_t m_DefaultHeapSize = 100 * 1024 * 1024;
-    const uint64_t m_SctrachSize = 10 * 1024 * 1024;
-    uint64_t m_CurrentHeapOffset;
+    uint64_t m_CurrentHeapOffset = 0;
+    nri::Buffer* m_ScratchBuffer = nullptr;
+    uint64_t m_ScratchAddress = 0;
 
     // D3D12:
     std::vector<ID3D12Heap*> m_D3D12GeometryHeaps;
-    ID3D12Resource* m_D3D12ScratchBuffer = nullptr;
     ID3D12Device5* m_Device5 = nullptr;
 
     // VK:
-    std::vector<VkDeviceMemory> m_VkMemories;
-    std::vector<VkBuffer> m_VkBuffers;
-    uint32_t m_VkMemoryTypeId = uint32_t(~0);
-    VkBuffer m_VkScrathBuffer;
+    std::vector<nri::Buffer*> m_VkBuffers;
 
     // common
     struct NriInterface

@@ -36,13 +36,6 @@ struct VkInterface {
     DECLARE_VK_FUNC(GetAccelerationStructureBuildSizesKHR);
     DECLARE_VK_FUNC(CmdBuildMicromapsEXT);
     DECLARE_VK_FUNC(CmdBuildAccelerationStructuresKHR);
-    DECLARE_VK_FUNC(CreateBuffer);
-    DECLARE_VK_FUNC(GetBufferMemoryRequirements);
-    DECLARE_VK_FUNC(GetPhysicalDeviceMemoryProperties);
-    DECLARE_VK_FUNC(AllocateMemory);
-    DECLARE_VK_FUNC(DestroyBuffer);
-    DECLARE_VK_FUNC(FreeMemory);
-    DECLARE_VK_FUNC(BindBufferMemory);
     DECLARE_VK_FUNC(CreateMicromapEXT);
     DECLARE_VK_FUNC(GetBufferDeviceAddress);
     DECLARE_VK_FUNC(CreateAccelerationStructureKHR);
@@ -75,14 +68,10 @@ inline VkBufferDeviceAddressInfo GetBufferAddressInfo(VkBuffer& buffer) {
 }
 
 void OpacityMicroMapsHelper::InitializeVK() {
-    VkInstance vkInstance = (VkInstance)NRI.GetInstanceVK(*m_Device);
     VkDevice vkDevice = (VkDevice)NRI.GetDeviceNativeObject(m_Device);
 
     { // Get required vk function pointers
         PFN_vkGetDeviceProcAddr getDeviceProcAddr = (PFN_vkGetDeviceProcAddr)NRI.GetDeviceProcAddrVK(*m_Device);
-        PFN_vkGetInstanceProcAddr getInstanceProcAddr = (PFN_vkGetInstanceProcAddr)NRI.GetInstanceProcAddrVK(*m_Device);
-
-        INIT_VK_FUNC(getInstanceProcAddr, vkInstance, GetPhysicalDeviceMemoryProperties);
 
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, GetMicromapBuildSizesEXT);
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, CreateMicromapEXT);
@@ -95,47 +84,9 @@ void OpacityMicroMapsHelper::InitializeVK() {
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, GetAccelerationStructureDeviceAddressKHR);
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, CmdBuildAccelerationStructuresKHR);
 
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, AllocateMemory);
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, FreeMemory);
-
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, CreateBuffer);
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, GetBufferMemoryRequirements);
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, BindBufferMemory);
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, GetBufferDeviceAddress);
-        INIT_VK_FUNC(getDeviceProcAddr, vkDevice, DestroyBuffer);
 
         INIT_VK_FUNC(getDeviceProcAddr, vkDevice, CmdPipelineBarrier);
-    }
-
-    { // create a buffer with properties required to store ommArrays, blases and scratch buffer to query memory type for future allocations
-        VkBufferCreateInfo bufferDesc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bufferDesc.pNext = NULL;
-        bufferDesc.size = m_DefaultHeapSize;
-        bufferDesc.flags = 0;
-        bufferDesc.usage = VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
-        VkBuffer buffer = NULL;
-        VK_CALL(VK.CreateBuffer(GetVkDevice(), &bufferDesc, nullptr, &buffer));
-
-        VkMemoryRequirements memoryRequirments = {};
-        VK.GetBufferMemoryRequirements(GetVkDevice(), buffer, &memoryRequirments);
-
-        VkPhysicalDeviceMemoryProperties memoryProperties = {};
-        VK.GetPhysicalDeviceMemoryProperties((VkPhysicalDevice)NRI.GetPhysicalDeviceVK(*m_Device), &memoryProperties);
-
-        const uint32_t memProperty = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
-            if ((memoryRequirments.memoryTypeBits & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & memProperty) == memProperty) {
-                m_VkMemoryTypeId = i;
-                break;
-            }
-        }
-        VK.DestroyBuffer(GetVkDevice(), buffer, nullptr);
-
-        if (m_VkMemoryTypeId == uint32_t(-1)) {
-            printf("[FAIL] Current device doesn't support requested memory type\n");
-            std::abort();
-        }
     }
 }
 
@@ -149,58 +100,13 @@ void OpacityMicroMapsHelper::DestroyBlasVK(nri::AccelerationStructure* blas) {
     VK.DestroyAccelerationStructureKHR(GetVkDevice(), vkBlas, nullptr);
 }
 
-void OpacityMicroMapsHelper::ReleaseMemoryVK() {
-    if (m_VkScrathBuffer)
-        VK.DestroyBuffer(GetVkDevice(), m_VkScrathBuffer, nullptr);
-    m_VkScrathBuffer = NULL;
-
-    for (auto& buffer : m_VkBuffers)
-        VK.DestroyBuffer(GetVkDevice(), buffer, nullptr);
-    m_VkBuffers.clear();
-
-    for (auto& memory : m_VkMemories)
-        VK.FreeMemory(GetVkDevice(), memory, nullptr);
-
-    m_VkMemories.clear();
-    m_CurrentHeapOffset = 0;
-}
-
-void OpacityMicroMapsHelper::AllocateMemoryVK(uint64_t size) {
-    m_CurrentHeapOffset = 0;
-    VkDeviceMemory& newMemory = m_VkMemories.emplace_back();
-
-    uint64_t allocationSize = (size > m_DefaultHeapSize) ? size : m_DefaultHeapSize;               // make the initial heap bigger to store the scratch resource
-    allocationSize = (m_VkScrathBuffer == NULL) ? allocationSize + m_SctrachSize : allocationSize; // make the initial heap bigger to store the scratch resource
-
-    VkMemoryAllocateFlagsInfo flagsInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-    flagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_MASK_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    flagsInfo.deviceMask = 0x1;
-
-    VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocInfo.allocationSize = allocationSize;
-    allocInfo.memoryTypeIndex = m_VkMemoryTypeId;
-    allocInfo.pNext = &flagsInfo;
-    VK_CALL(VK.AllocateMemory(GetVkDevice(), &allocInfo, nullptr, &newMemory));
-
-    if (m_VkScrathBuffer == NULL) { // create scratch buffer and put it in the end of the heap
-        VkBufferCreateInfo scratchDesc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        scratchDesc.pNext = NULL;
-        scratchDesc.size = m_SctrachSize;
-        scratchDesc.flags = 0;
-        scratchDesc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        VK_CALL(VK.CreateBuffer(GetVkDevice(), &scratchDesc, nullptr, &m_VkScrathBuffer));
-        VK_CALL(VK.BindBufferMemory(GetVkDevice(), m_VkScrathBuffer, newMemory, m_DefaultHeapSize));
+VkBuffer OpacityMicroMapsHelper::GetGeometryBufferVK(uint64_t size) {
+    if (m_VkBuffers.empty() || m_CurrentHeapOffset + size > NRI.GetBufferDesc(*m_VkBuffers.back()).size) {
+        const auto usage = nri::BufferUsageBits::MICROMAP_STORAGE | nri::BufferUsageBits::ACCELERATION_STRUCTURE_STORAGE;
+        m_VkBuffers.push_back(CreateBuildBuffer(std::max(size, m_DefaultHeapSize), usage));
+        m_CurrentHeapOffset = 0;
     }
-
-    VkBufferCreateInfo bufferDesc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bufferDesc.pNext = NULL;
-    bufferDesc.size = m_DefaultHeapSize;
-    bufferDesc.flags = 0;
-    bufferDesc.usage = VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
-    VkBuffer& buffer = m_VkBuffers.emplace_back();
-    VK_CALL(VK.CreateBuffer(GetVkDevice(), &bufferDesc, nullptr, &buffer));
-    VK_CALL(VK.BindBufferMemory(GetVkDevice(), buffer, newMemory, 0));
+    return (VkBuffer)NRI.GetBufferNativeObject(m_VkBuffers.back());
 }
 
 inline static uint64_t Align(uint64_t s, uint64_t a) {
@@ -273,7 +179,6 @@ void OpacityMicroMapsHelper::GetPreBuildInfoVK(MaskedGeometryBuildDesc** queue, 
         return;
 
     uint64_t maxMicromapSize = 0;
-    uint64_t maxScratchSize = 0;
     for (size_t i = 0; i < count; ++i) {
         MaskedGeometryBuildDesc& desc = *queue[i];
         const MaskedGeometryBuildDesc::Inputs& inputs = desc.inputs;
@@ -285,35 +190,11 @@ void OpacityMicroMapsHelper::GetPreBuildInfoVK(MaskedGeometryBuildDesc** queue, 
             desc.prebuildInfo.ommArraySize = preBuildInfo.micromapSize;
             desc.prebuildInfo.maxScratchDataSize = preBuildInfo.buildScratchSize;
             maxMicromapSize = std::max(preBuildInfo.micromapSize, maxMicromapSize);
-            maxScratchSize = std::max(preBuildInfo.buildScratchSize, maxScratchSize);
         }
     }
 
-    VkDeviceMemory tmpMemory = {};
-    VkBuffer scratch = {};
-    VkBuffer tmpOmmBuffer = {};
-    { // Perform temporal allocation to store empty micromaps. This is required to get correct blas size
-        uint64_t allocationSize = Align(maxMicromapSize, VK_PLACEMENT_ALIGNMENT) + Align(maxScratchSize, VK_PLACEMENT_ALIGNMENT);
-        VkMemoryAllocateFlagsInfo flagsInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-        flagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_MASK_BIT | VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-        flagsInfo.deviceMask = 0x1;
-
-        VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        allocInfo.allocationSize = allocationSize;
-        allocInfo.memoryTypeIndex = m_VkMemoryTypeId;
-        allocInfo.pNext = &flagsInfo;
-        VK_CALL(VK.AllocateMemory(GetVkDevice(), &allocInfo, nullptr, &tmpMemory));
-
-        VkBufferCreateInfo desc = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        desc.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        desc.size = maxMicromapSize;
-        VK_CALL(VK.CreateBuffer(GetVkDevice(), &desc, nullptr, &tmpOmmBuffer));
-        VK_CALL(VK.BindBufferMemory(GetVkDevice(), tmpOmmBuffer, tmpMemory, 0));
-
-        desc.size = maxScratchSize;
-        VK_CALL(VK.CreateBuffer(GetVkDevice(), &desc, nullptr, &scratch));
-        VK_CALL(VK.BindBufferMemory(GetVkDevice(), scratch, tmpMemory, Align(maxMicromapSize, VK_PLACEMENT_ALIGNMENT)));
-    }
+    nri::Buffer* storage = CreateBuildBuffer(maxMicromapSize, nri::BufferUsageBits::MICROMAP_STORAGE);
+    VkBuffer tmpOmmBuffer = (VkBuffer)NRI.GetBufferNativeObject(storage);
 
     for (size_t i = 0; i < count; ++i) { // Get BLAS prebuild info
         MaskedGeometryBuildDesc& desc = *queue[i];
@@ -362,9 +243,7 @@ void OpacityMicroMapsHelper::GetPreBuildInfoVK(MaskedGeometryBuildDesc** queue, 
             VK.DestroyMicromapEXT(GetVkDevice(), tmpMicromap, nullptr);
         }
     }
-    VK.DestroyBuffer(GetVkDevice(), scratch, nullptr);
-    VK.DestroyBuffer(GetVkDevice(), tmpOmmBuffer, nullptr);
-    VK.FreeMemory(GetVkDevice(), tmpMemory, nullptr);
+    NRI.DestroyBuffer(storage);
 }
 
 inline void InsertBuildBarrier(VkCommandBuffer commandBuffer) {
@@ -375,15 +254,10 @@ inline void InsertBuildBarrier(VkCommandBuffer commandBuffer) {
 }
 
 void OpacityMicroMapsHelper::BindOmmToMemoryVK(VkMicromapEXT& ommArray, size_t size) {
-    if (m_VkMemories.empty() || m_CurrentHeapOffset + size > m_DefaultHeapSize)
-        AllocateMemoryVK(size);
-
-    VkBuffer& currentBuffer = m_VkBuffers.back();
-
     VkMicromapCreateInfoEXT ommArrayDesc = {VK_STRUCTURE_TYPE_MICROMAP_CREATE_INFO_EXT};
     ommArrayDesc.pNext = nullptr;
     ommArrayDesc.createFlags = 0;
-    ommArrayDesc.buffer = currentBuffer;
+    ommArrayDesc.buffer = GetGeometryBufferVK(size);
     ommArrayDesc.offset = m_CurrentHeapOffset;
     assert(ommArrayDesc.offset % VK_PLACEMENT_ALIGNMENT == 0);
     ommArrayDesc.size = uint64_t(size);
@@ -412,13 +286,11 @@ void OpacityMicroMapsHelper::BuildOmmArrayVK(MaskedGeometryBuildDesc& desc, nri:
 
     VkBufferDeviceAddressInfo ommArrayDataAddressInfo = GetBufferAddressInfo(ommArrayData);
     VkBufferDeviceAddressInfo ommDescArrayAddressInfo = GetBufferAddressInfo(ommDescArray);
-    VkBufferDeviceAddressInfo scratchAddressInfo = GetBufferAddressInfo(m_VkScrathBuffer);
 
     VkDeviceAddress ommArrayDataAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &ommArrayDataAddressInfo) + ommArrayDataOffset;
     VkDeviceAddress ommDescArrayAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &ommDescArrayAddressInfo) + ommDescArrayOffset;
-    VkDeviceAddress scratchAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &scratchAddressInfo);
 
-    VkMicromapBuildInfoEXT buildDesc = FillMicromapBuildInfo(inputs, ommArray, ommArrayDataAddress, ommDescArrayAddress, scratchAddress);
+    VkMicromapBuildInfoEXT buildDesc = FillMicromapBuildInfo(inputs, ommArray, ommArrayDataAddress, ommDescArrayAddress, m_ScratchAddress);
 
     VkCommandBuffer vkCommandBuffer = (VkCommandBuffer)NRI.GetCommandBufferNativeObject(commandBuffer);
     VK.CmdBuildMicromapsEXT(vkCommandBuffer, 1, &buildDesc);
@@ -428,18 +300,14 @@ void OpacityMicroMapsHelper::BuildOmmArrayVK(MaskedGeometryBuildDesc& desc, nri:
 }
 
 void OpacityMicroMapsHelper::BindBlasToMemoryVK(VkAccelerationStructureKHR& blas, size_t size) {
-    if (m_VkMemories.empty() || m_CurrentHeapOffset + size > m_DefaultHeapSize)
-        AllocateMemoryVK(size);
-
-    VkBuffer& currentBuffer = m_VkBuffers.back();
     VkAccelerationStructureCreateInfoKHR blasDesc = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
     blasDesc.pNext = nullptr;
-    blasDesc.buffer = currentBuffer;
+    blasDesc.buffer = GetGeometryBufferVK(size);
     blasDesc.offset = m_CurrentHeapOffset;
     assert(blasDesc.offset % VK_PLACEMENT_ALIGNMENT == 0);
     blasDesc.size = size;
     blasDesc.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    VK.CreateAccelerationStructureKHR(GetVkDevice(), &blasDesc, nullptr, &blas);
+    VK_CALL(VK.CreateAccelerationStructureKHR(GetVkDevice(), &blasDesc, nullptr, &blas));
     uint64_t alignedOffset = Align(size, VK_PLACEMENT_ALIGNMENT);
     m_CurrentHeapOffset += alignedOffset;
 }
@@ -462,18 +330,16 @@ void OpacityMicroMapsHelper::BuildBlasVK(MaskedGeometryBuildDesc& desc, nri::Com
 
     VkBufferDeviceAddressInfo indicesAddressInfo = GetBufferAddressInfo(indices);
     VkBufferDeviceAddressInfo verticesAddressInfo = GetBufferAddressInfo(vertices);
-    VkBufferDeviceAddressInfo scratchAddressInfo = GetBufferAddressInfo(m_VkScrathBuffer);
 
     VkDeviceAddress indicesAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &indicesAddressInfo) + inputs.indices.offset;
     VkDeviceAddress verticesAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &verticesAddressInfo) + inputs.vertices.offset;
-    VkDeviceAddress scratchAddress = VK.GetBufferDeviceAddress(GetVkDevice(), &scratchAddressInfo);
 
     VkAccelerationStructureKHR blas = {};
     BindBlasToMemoryVK(blas, desc.prebuildInfo.blasSize);
 
     VkAccelerationStructureTrianglesOpacityMicromapEXT ommBlasDesc = FillOmmTrianglesDesc(desc, ommIndicesAddress);
     VkAccelerationStructureGeometryKHR geometryDesc = FillGeometryDesc(desc, &ommBlasDesc, indicesAddress, verticesAddress);
-    VkAccelerationStructureBuildGeometryInfoKHR blasDesc = FillBlasBuildInfo(blas, geometryDesc, scratchAddress);
+    VkAccelerationStructureBuildGeometryInfoKHR blasDesc = FillBlasBuildInfo(blas, geometryDesc, m_ScratchAddress);
 
     VkAccelerationStructureBuildRangeInfoKHR range = {};
     range.primitiveCount = uint32_t(inputs.indices.numElements / 3);
@@ -491,8 +357,6 @@ void OpacityMicroMapsHelper::BuildBlasVK(MaskedGeometryBuildDesc& desc, nri::Com
 }
 
 void OpacityMicroMapsHelper::BuildMaskedGeometryVK(MaskedGeometryBuildDesc** queue, const size_t count, nri::CommandBuffer* commandBuffer) {
-    GetPreBuildInfoVK(queue, count);
-
     for (size_t i = 0; i < count; ++i) { // Build omm then blas to increase memory locality
         BuildOmmArrayVK(*queue[i], commandBuffer);
         BuildBlasVK(*queue[i], commandBuffer);

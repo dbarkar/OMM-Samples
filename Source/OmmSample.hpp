@@ -943,7 +943,9 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
     #endif
 #pragma endregion
 
-    NRI_ABORT_ON_FAILURE(NRI.GetQueue(*m_Device, nri::QueueType::GRAPHICS, 0, m_GraphicsQueue));
+    m_OmmGraphicsContext.Init(NRI, m_Device, nri::QueueType::GRAPHICS);
+    m_OmmComputeContext.Init(NRI, m_Device, nri::QueueType::COMPUTE);
+    m_GraphicsQueue = m_OmmGraphicsContext.commandQueue;
     NRI_ABORT_ON_FAILURE(NRI.CreateFence(*m_Device, {}, m_FrameFence));
 
     { // Create streamer
@@ -1131,8 +1133,6 @@ bool Sample::Initialize(nri::GraphicsAPI graphicsAPI, bool) {
         InitAlphaTestedGeometry();
         m_OmmHelper.Initialize(m_Device, m_DisableOmmBlasBuild);
         m_Profiler.Init(m_Device);
-        m_OmmGraphicsContext.Init(NRI, m_Device, nri::QueueType::GRAPHICS);
-        m_OmmComputeContext.Init(NRI, m_Device, nri::QueueType::COMPUTE);
 
         size_t sceneBeginNameOffset = m_SceneFile.find_last_of("/");
         sceneBeginNameOffset = sceneBeginNameOffset == std::string::npos ? 0 : ++sceneBeginNameOffset;
@@ -1515,6 +1515,14 @@ void PrepareCpuBuilderInputs(NRIInterface& NRI, const OmmBatch& batch, std::vect
     }
 }
 
+constexpr nri::BufferUsageBits GetOmmBuildInputUsage(ommhelper::OmmDataLayout layout) {
+    if (layout == ommhelper::OmmDataLayout::ArrayData || layout == ommhelper::OmmDataLayout::DescArray)
+        return nri::BufferUsageBits::MICROMAP_BUILD_INPUT;
+    if (layout == ommhelper::OmmDataLayout::Indices)
+        return nri::BufferUsageBits::ACCELERATION_STRUCTURE_BUILD_INPUT;
+    return nri::BufferUsageBits::NONE;
+}
+
 void Sample::FillOmmBlasBuildQueue(const OmmBatch& batch, std::vector<ommhelper::MaskedGeometryBuildDesc*>& outBuildQueue) {
     outBuildQueue.clear();
     outBuildQueue.reserve(batch.count);
@@ -1552,10 +1560,10 @@ void Sample::FillOmmBlasBuildQueue(const OmmBatch& batch, std::vector<ommhelper:
                 buildDesc.inputs.buffers[j] = bakeResult.gpuBuffers[j];
         } else { // Create upload buffers to store baker output during ommArray/blas creation
             nri::BufferDesc bufferDesc = {};
-            bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE;
 
             for (uint32_t j = 0; j < (uint32_t)ommhelper::OmmDataLayout::BlasBuildGpuBuffersNum; ++j) {
                 bufferDesc.size = bakeResult.outData[j].size();
+                bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE | GetOmmBuildInputUsage((ommhelper::OmmDataLayout)j);
                 buildDesc.inputs.buffers[j].dataSize = bufferDesc.size;
                 buildDesc.inputs.buffers[j].bufferSize = bufferDesc.size;
                 NRI.CreateBuffer(*m_Device, bufferDesc, buildDesc.inputs.buffers[j].buffer);
@@ -1750,6 +1758,8 @@ void Sample::CreateAndBindGpuBakerArrayDataBuffer(const OmmGpuBakerPrebuildMemor
     bufferDesc.byteAddress = true;
     bufferDesc.size = helper::Align(bufferDesc.size, ommAlignment);
     bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE;
+    if (!m_DisableOmmBlasBuild)
+        bufferDesc.usage |= nri::BufferUsageBits::MICROMAP_BUILD_INPUT;
     NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuOutputBuffers[arrayDataId]));
     BindBuffersToMemory(NRI, m_Device, &m_OmmGpuOutputBuffers[arrayDataId], 1, m_OmmBakerAllocations, nri::MemoryLocation::DEVICE);
 
@@ -1781,6 +1791,8 @@ void Sample::CreateAndBindGpuBakerSatitcBuffers(const OmmGpuBakerPrebuildMemoryS
         bufferDesc.size = memoryStats.outputTotalSizes[i];
         bufferDesc.byteAddress = true;
         bufferDesc.usage = nri::BufferUsageBits::SHADER_RESOURCE_STORAGE | nri::BufferUsageBits::SHADER_RESOURCE;
+        if (!m_DisableOmmBlasBuild)
+            bufferDesc.usage |= GetOmmBuildInputUsage((ommhelper::OmmDataLayout)i);
         NRI_ABORT_ON_FAILURE(NRI.CreateBuffer(*m_Device, bufferDesc, m_OmmGpuOutputBuffers[i]));
         gpuBuffers.push_back(m_OmmGpuOutputBuffers[i]);
     }

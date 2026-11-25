@@ -142,15 +142,9 @@ inline static size_t Align(size_t size, size_t alignment) {
 }
 
 void OpacityMicroMapsHelper::ReleaseMemoryD3D12() {
-    if (m_D3D12ScratchBuffer)
-        m_D3D12ScratchBuffer->Release();
-    m_D3D12ScratchBuffer = nullptr;
-
     for (auto& heap : m_D3D12GeometryHeaps)
         heap->Release();
     m_D3D12GeometryHeaps.clear();
-
-    m_CurrentHeapOffset = 0;
 }
 
 void OpacityMicroMapsHelper::AllocateMemoryD3D12(uint64_t size) {
@@ -159,20 +153,16 @@ void OpacityMicroMapsHelper::AllocateMemoryD3D12(uint64_t size) {
     D3D12_HEAP_DESC desc = {};
     desc.Properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
     desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
-    desc.SizeInBytes = size > m_DefaultHeapSize ? size : m_DefaultHeapSize;
-    desc.SizeInBytes = m_D3D12ScratchBuffer ? desc.SizeInBytes : desc.SizeInBytes + m_SctrachSize;
-    m_Device5->CreateHeap(&desc, IID_PPV_ARGS(&newHeap));
-    m_CurrentHeapOffset = 0;
-
-    if (!m_D3D12ScratchBuffer) {
-        D3D12_RESOURCE_DESC resourceDesc = InitBufferResourceDesc(m_SctrachSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        m_Device5->CreatePlacedResource(m_D3D12GeometryHeaps.back(), 0, &resourceDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&m_D3D12ScratchBuffer));
-        m_CurrentHeapOffset += Align(m_SctrachSize, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+    desc.SizeInBytes = Align(std::max(size, m_DefaultHeapSize), D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
+    if (FAILED(m_Device5->CreateHeap(&desc, IID_PPV_ARGS(&newHeap)))) {
+        fprintf(stderr, "[FAIL] Cannot allocate OMM geometry heap (%llu bytes)\n", (unsigned long long)desc.SizeInBytes);
+        std::abort();
     }
+    m_CurrentHeapOffset = 0;
 }
 
 void OpacityMicroMapsHelper::BindResourceToMemoryD3D12(ID3D12Resource*& resource, size_t size) {
-    if (m_D3D12GeometryHeaps.empty() || (m_CurrentHeapOffset + size) > m_DefaultHeapSize)
+    if (m_D3D12GeometryHeaps.empty() || m_CurrentHeapOffset + size > m_D3D12GeometryHeaps.back()->GetDesc().SizeInBytes)
         AllocateMemoryD3D12(size);
 
     ID3D12Heap* heap = m_D3D12GeometryHeaps.back();
@@ -181,7 +171,10 @@ void OpacityMicroMapsHelper::BindResourceToMemoryD3D12(ID3D12Resource*& resource
     D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
 
     D3D12_RESOURCE_DESC resourceDesc = InitBufferResourceDesc(size, resourceFlags);
-    m_Device5->CreatePlacedResource(heap, m_CurrentHeapOffset, &resourceDesc, initialState, nullptr, IID_PPV_ARGS(&resource));
+    if (FAILED(m_Device5->CreatePlacedResource(heap, m_CurrentHeapOffset, &resourceDesc, initialState, nullptr, IID_PPV_ARGS(&resource)))) {
+        fprintf(stderr, "[FAIL] Cannot create OMM geometry resource (%zu bytes)\n", size);
+        std::abort();
+    }
     m_CurrentHeapOffset += Align(size, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT);
 }
 
@@ -246,7 +239,7 @@ void OpacityMicroMapsHelper::BuildOmmArrayD3D12(MaskedGeometryBuildDesc& desc, n
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC vmArrayDesc = {};
         vmArrayDesc.DestAccelerationStructureData = ommArrayBuffer->GetGPUVirtualAddress();
         vmArrayDesc.Inputs = vmInput;
-        vmArrayDesc.ScratchAccelerationStructureData = m_D3D12ScratchBuffer->GetGPUVirtualAddress();
+        vmArrayDesc.ScratchAccelerationStructureData = m_ScratchAddress;
 
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info = {};
         // Known issue in DXR 1.2: getting debug layer alignment error for an input buffer. Error is gone if D3D12_RAYTRACING_OPACITY_MICROMAP_ARRAY_BYTE_ALIGNMENT == 256
@@ -287,7 +280,7 @@ void OpacityMicroMapsHelper::BuildBlasD3D12(MaskedGeometryBuildDesc& desc, nri::
         D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC vmArrayDesc = {};
         vmArrayDesc.DestAccelerationStructureData = blas->GetGPUVirtualAddress();
         vmArrayDesc.Inputs = inputDesc;
-        vmArrayDesc.ScratchAccelerationStructureData = m_D3D12ScratchBuffer->GetGPUVirtualAddress();
+        vmArrayDesc.ScratchAccelerationStructureData = m_ScratchAddress;
 
         ID3D12GraphicsCommandList4* commandList = GetD3D12GraphicsCommandList4(commandBuffer);
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info = {};
@@ -304,8 +297,6 @@ void OpacityMicroMapsHelper::BuildBlasD3D12(MaskedGeometryBuildDesc& desc, nri::
 }
 
 void OpacityMicroMapsHelper::BuildMaskedGeometryD3D12(MaskedGeometryBuildDesc** queue, const size_t count, nri::CommandBuffer* commandBuffer) {
-    GetPreBuildInfoD3D12(queue, count);
-
     for (size_t i = 0; i < count; ++i) { // build omm then blas to increase memory locality
         BuildOmmArrayD3D12(*queue[i], commandBuffer);
         BuildBlasD3D12(*queue[i], commandBuffer);
