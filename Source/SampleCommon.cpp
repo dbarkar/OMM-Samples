@@ -1666,8 +1666,11 @@ void Sample::CreateAccelerationStructures() {
 
             NRI.CmdBarrier(*commandBuffer, barrierDesc);
 
-            // Build everything in one go
-            NRI.CmdBuildBottomLevelAccelerationStructures(*commandBuffer, buildBottomLevelAccelerationStructureDescs.data(), (uint32_t)buildBottomLevelAccelerationStructureDescs.size());
+            if (deviceDesc.graphicsAPI == nri::GraphicsAPI::D3D12) {
+                for (const auto& desc : buildBottomLevelAccelerationStructureDescs)
+                    NRI.CmdBuildBottomLevelAccelerationStructures(*commandBuffer, &desc, 1);
+            } else
+                NRI.CmdBuildBottomLevelAccelerationStructures(*commandBuffer, buildBottomLevelAccelerationStructureDescs.data(), (uint32_t)buildBottomLevelAccelerationStructureDescs.size());
 
             // Barriers (read)
             for (nri::BufferBarrierDesc& bufferBarrier : bufferBarriers) {
