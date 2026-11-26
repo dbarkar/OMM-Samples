@@ -159,7 +159,6 @@ private:
 
 private:
     // On Init
-    void CreateTextures(uint32_t pipelineNum);
     void CreateSamplers(const ommGpuPipelineInfoDesc* pipelinesInfo);
     void CreatePipelines(const ommGpuPipelineInfoDesc* pipelinesInfo);
     void CreateComputePipeline(uint32_t id, const ommGpuPipelineInfoDesc* pipelineInfo);
@@ -181,6 +180,7 @@ private:
     nri::Descriptor* GetDescriptor(const ommGpuResource& resource, uint32_t geometryId);
     void DispatchCompute(nri::CommandBuffer& commandBuffer, const ommGpuComputeDesc& desc, uint32_t geometryId);
     void DispatchComputeIndirect(nri::CommandBuffer& commandBuffer, const ommGpuComputeIndirectDesc& desc, uint32_t geometryId);
+    void PrepareDebugAttachment(nri::CommandBuffer& commandBuffer, nri::AttachmentDesc& attachment);
     void DispatchDrawIndexedIndirect(nri::CommandBuffer& commandBuffer, const ommGpuDrawIndexedIndirectDesc& desc, uint32_t geometryId);
 
     void GenerateVisibilityMaskGPU(nri::CommandBuffer& commandBuffer, uint32_t geometryId);
@@ -214,16 +214,8 @@ private:
     uint32_t m_ConstantBufferSize;
 
     // Textures
-    nri::Texture* m_DebugTexture;
-    nri::Memory* m_DebugTextureMemory;
-    nri::Descriptor* m_DebugTextureDescriptor;
-    nri::AccessBits m_DebugTextureState = nri::AccessBits::NONE;
-
-    nri::Descriptor* m_EmptyDescriptor;
-    std::vector<nri::Descriptor*> m_ColorDescriptorPerPipeline;
-
-    const uint32_t m_EmptyFrameBufferId = 0;
-    const uint32_t m_DebugFrameBufferId = 1;
+    nri::Texture* m_DebugTexture = nullptr;
+    nri::Descriptor* m_DebugTextureDescriptor = nullptr;
     const nri::Format m_DebugTexFormat = nri::Format::RGBA8_SNORM;
 
     // ommbaker

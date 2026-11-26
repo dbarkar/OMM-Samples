@@ -53,7 +53,6 @@ void OmmBakerGpuIntegration::Initialize(nri::Device& device) {
     {
         CreateStaticResources(commandQueue);
         CreateSamplers(m_PipelineInfo);
-        CreateTextures(m_PipelineInfo->pipelineNum);
         CreatePipelines(m_PipelineInfo);
     }
 }
@@ -373,8 +372,6 @@ void OmmBakerGpuIntegration::CreateGraphicsPipeline(uint32_t pipelineId, const o
         outputMergerDesc.depth.write = false;
     }
 
-    m_ColorDescriptorPerPipeline[pipelineId] = outputMergerDesc.colorNum ? m_DebugTextureDescriptor : m_EmptyDescriptor;
-
     std::vector<nri::ShaderDesc> shaderStages;
     if (pipelineDesc.vertexShader.data) {
         nri::ShaderDesc& desc = shaderStages.emplace_back();
@@ -469,39 +466,6 @@ void OmmBakerGpuIntegration::CreateSamplers(const ommGpuPipelineInfoDesc* pipeli
         nri::Descriptor* descriptor = nullptr;
         NRI_ABORT_ON_FAILURE(NRI.CreateSampler(*m_Device, samplerDesc, descriptor));
         m_Samplers.push_back(descriptor);
-    }
-}
-
-void OmmBakerGpuIntegration::CreateTextures(uint32_t pipelineNum) {
-    m_ColorDescriptorPerPipeline.resize(pipelineNum, nullptr);
-
-    { // create debug texture
-        constexpr uint16_t maxTexSize = 8042;
-        nri::TextureDesc textureDesc = {};
-        textureDesc.type = nri::TextureType::TEXTURE_2D;
-        textureDesc.usage = nri::TextureUsageBits::COLOR_ATTACHMENT;
-        textureDesc.layerNum = 1;
-        textureDesc.format = m_DebugTexFormat;
-        textureDesc.width = maxTexSize;
-        textureDesc.height = maxTexSize;
-        textureDesc.depth = 1;
-        textureDesc.sampleNum = 1;
-        textureDesc.mipNum = 1;
-        NRI_ABORT_ON_FAILURE(NRI.CreateTexture(*m_Device, textureDesc, m_DebugTexture));
-
-        nri::ResourceGroupDesc resourceGrpoupDesc = {};
-        resourceGrpoupDesc.textureNum = 1;
-        resourceGrpoupDesc.textures = &m_DebugTexture;
-        resourceGrpoupDesc.memoryLocation = nri::MemoryLocation::DEVICE;
-        NRI_ABORT_ON_FAILURE(NRI.AllocateAndBindMemory(*m_Device, resourceGrpoupDesc, &m_DebugTextureMemory));
-
-        nri::TextureViewDesc textureViewDesc = {};
-        textureViewDesc.type = nri::TextureView::COLOR_ATTACHMENT;
-        textureViewDesc.mipNum = 1;
-        textureViewDesc.mipOffset = 0;
-        textureViewDesc.format = m_DebugTexFormat;
-        textureViewDesc.texture = m_DebugTexture;
-        NRI.CreateTextureView(textureViewDesc, m_DebugTextureDescriptor);
     }
 }
 
@@ -971,6 +935,43 @@ void OmmBakerGpuIntegration::DispatchComputeIndirect(nri::CommandBuffer& command
     InsertUavBarriers(commandBuffer, desc.resources, desc.resourceNum, geometryId);
 }
 
+void OmmBakerGpuIntegration::PrepareDebugAttachment(nri::CommandBuffer& commandBuffer, nri::AttachmentDesc& attachment) {
+    nri::TextureBarrierDesc transition = {};
+    transition.after = {nri::AccessBits::COLOR_ATTACHMENT, nri::Layout::COLOR_ATTACHMENT, nri::StageBits::COLOR_ATTACHMENT};
+    if (!m_DebugTexture) {
+        constexpr nri::Dim_t size = 8042;
+        nri::TextureDesc textureDesc = {};
+        textureDesc.type = nri::TextureType::TEXTURE_2D;
+        textureDesc.usage = nri::TextureUsageBits::COLOR_ATTACHMENT;
+        textureDesc.format = m_DebugTexFormat;
+        textureDesc.width = size;
+        textureDesc.height = size;
+        textureDesc.depth = 1;
+        textureDesc.mipNum = 1;
+        textureDesc.layerNum = 1;
+        textureDesc.sampleNum = 1;
+        NRI_ABORT_ON_FAILURE(NRI.CreateCommittedTexture(*m_Device, nri::MemoryLocation::DEVICE, 0.0f, textureDesc, m_DebugTexture));
+
+        nri::TextureViewDesc viewDesc = {};
+        viewDesc.texture = m_DebugTexture;
+        viewDesc.type = nri::TextureView::COLOR_ATTACHMENT;
+        NRI_ABORT_ON_FAILURE(NRI.CreateTextureView(viewDesc, m_DebugTextureDescriptor));
+
+        transition.before = {nri::AccessBits::NONE, nri::Layout::UNDEFINED, nri::StageBits::NONE};
+        attachment.loadOp = nri::LoadOp::CLEAR;
+    } else {
+        transition.before = transition.after;
+    }
+    transition.texture = m_DebugTexture;
+
+    nri::BarrierDesc barrier = {};
+    barrier.textures = &transition;
+    barrier.textureNum = 1;
+    NRI.CmdBarrier(commandBuffer, barrier);
+
+    attachment.descriptor = m_DebugTextureDescriptor;
+}
+
 void OmmBakerGpuIntegration::DispatchDrawIndexedIndirect(nri::CommandBuffer& commandBuffer, const ommGpuDrawIndexedIndirectDesc& desc, uint32_t geometryId) {
     nri::DescriptorSet* descriptorSet = PrepareDispatch(commandBuffer, desc.resources, desc.resourceNum, desc.pipelineIndex, geometryId);
 
@@ -1010,29 +1011,10 @@ void OmmBakerGpuIntegration::DispatchDrawIndexedIndirect(nri::CommandBuffer& com
 
     nri::RenderingDesc renderingDesc = {};
     nri::AttachmentDesc attachmentDesc = {};
-    attachmentDesc.descriptor = m_ColorDescriptorPerPipeline[desc.pipelineIndex];
-    renderingDesc.colors = &attachmentDesc;
-    renderingDesc.colorNum = m_ColorDescriptorPerPipeline[desc.pipelineIndex] ? 1 : 0;
-    const bool hasDebugTextureOutput = renderingDesc.colorNum > 0;
-
-    if (hasDebugTextureOutput && m_DebugTextureState != nri::AccessBits::COLOR_ATTACHMENT) { // perform debug frame buffer transition
-        nri::TextureBarrierDesc textureBarrierDesc = {};
-        textureBarrierDesc.texture = m_DebugTexture;
-        textureBarrierDesc.mipNum = 1;
-        textureBarrierDesc.mipOffset = 0;
-        textureBarrierDesc.layerOffset = 0;
-        textureBarrierDesc.layerNum = 1;
-        textureBarrierDesc.before.access = m_DebugTextureState;
-        textureBarrierDesc.before.stages = nri::StageBits::ALL;
-        textureBarrierDesc.after.access = nri::AccessBits::COLOR_ATTACHMENT;
-        textureBarrierDesc.after.stages = nri::StageBits::ALL;
-
-        nri::BarrierDesc barrier = {};
-        barrier.textureNum = 1;
-        barrier.textures = &textureBarrierDesc;
-
-        NRI.CmdBarrier(commandBuffer, barrier);
-        m_DebugTextureState = nri::AccessBits::COLOR_ATTACHMENT;
+    if (m_PipelineInfo->pipelines[desc.pipelineIndex].graphics.numRenderTargets) {
+        PrepareDebugAttachment(commandBuffer, attachmentDesc);
+        renderingDesc.colors = &attachmentDesc;
+        renderingDesc.colorNum = 1;
     }
 
     NRI.CmdBeginRendering(commandBuffer, renderingDesc);
@@ -1206,12 +1188,6 @@ void OmmBakerGpuIntegration::Destroy() {
         NRI.DestroyTexture(m_DebugTexture);
         m_DebugTexture = nullptr;
     }
-    if (m_DebugTextureMemory) {
-        NRI.FreeMemory(m_DebugTextureMemory);
-        m_DebugTextureMemory = nullptr;
-    }
-    m_ColorDescriptorPerPipeline.resize(0);
-    m_ColorDescriptorPerPipeline.shrink_to_fit();
 
     for (auto& sampler : m_Samplers)
         if (sampler)
